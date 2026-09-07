@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nexus CRM — Enterprise Sales & Customer Intelligence</title>
+  <style>
+    :root {
+      --host-primary: #4f46e5;
+      --host-bg: #f8fafc;
+      --host-sidebar: #0f172a;
+      --host-card: #ffffff;
+      --host-text: #1e293b;
+      --host-muted: #64748b;
+      --host-border: #e2e8f0;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    body {
+      background-color: var(--host-bg);
+      color: var(--host-text);
+      display: flex;
+      min-height: 100vh;
+      width: 100vw;
+      overflow-x: hidden;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 260px;
+      background-color: var(--host-sidebar);
+      color: #ffffff;
+      display: flex;
+      flex-direction: column;
+      padding: 24px 16px;
+      gap: 32px;
+      flex-shrink: 0;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .brand-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      color: #fff;
+    }
+
+    .nav-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      color: #94a3b8;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .nav-item.active, .nav-item:hover {
+      background-color: rgba(255, 255, 255, 0.08);
+      color: #ffffff;
+    }
+
+    /* Main Area */
+    .main-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .topbar {
+      height: 70px;
+      background-color: var(--host-card);
+      border-bottom: 1px solid var(--host-border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 32px;
+    }
+
+    .page-title {
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .user-profile {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background-color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      color: #475569;
+    }
+
+    .dashboard-body {
+      padding: 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+    }
+
+    .banner-card {
+      background: linear-gradient(135deg, #4f46e5, #7c3aed);
+      color: #ffffff;
+      padding: 24px 32px;
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 10px 25px rgba(79, 70, 229, 0.2);
+    }
+
+    .banner-title {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .banner-desc {
+      font-size: 14px;
+      opacity: 0.9;
+      max-width: 600px;
+      line-height: 1.5;
+    }
+
+    .banner-btn {
+      background: #ffffff;
+      color: #4f46e5;
+      font-weight: 700;
+      font-size: 13px;
+      padding: 12px 22px;
+      border-radius: 10px;
+      border: none;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      transition: transform 0.2s, box-shadow 0.2s;
+      white-space: nowrap;
+    }
+
+    .banner-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+    }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+    }
+
+    .kpi-card {
+      background-color: var(--host-card);
+      padding: 20px 24px;
+      border-radius: 14px;
+      border: 1px solid var(--host-border);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    }
+
+    .kpi-label {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--host-muted);
+      margin-bottom: 8px;
+    }
+
+    .kpi-value {
+      font-size: 26px;
+      font-weight: 800;
+      color: var(--host-text);
+    }
+
+    .kpi-sub {
+      font-size: 12px;
+      color: #10b981;
+      font-weight: 600;
+      margin-top: 4px;
+    }
+
+    .table-card {
+      background-color: var(--host-card);
+      border-radius: 14px;
+      border: 1px solid var(--host-border);
+      padding: 24px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    }
+
+    .table-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+
+    .table-title {
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 14px;
+    }
+
+    th {
+      color: var(--host-muted);
+      font-weight: 600;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--host-border);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    td {
+      padding: 16px;
+      border-bottom: 1px solid var(--host-border);
+      color: var(--host-text);
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .badge-success { background: #dcfce7; color: #166534; }
+    .badge-progress { background: #e0e7ff; color: #3730a3; }
+    .badge-lead { background: #fef3c7; color: #92400e; }
+  </style>
+
+  <!-- 1. Include Standalone Web Component Script -->
+  <script src="/public/widget.js?v=2.2"></script>
+</head>
+<body>
+
+  <!-- Host Page Sidebar -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-icon">N</div>
+      <span>Nexus CRM</span>
+    </div>
+    <ul class="nav-list">
+      <li class="nav-item active">📊 Dashboard</li>
+      <li class="nav-item">💼 Deals & Pipeline</li>
+      <li class="nav-item">👥 Contacts</li>
+      <li class="nav-item">📈 Performance</li>
+      <li class="nav-item">⚙️ Settings</li>
+    </ul>
+  </aside>
+
+  <!-- Host Page Main Content -->
+  <main class="main-content">
+    <header class="topbar">
+      <h1 class="page-title">Q3 Enterprise Pipeline Dashboard</h1>
+      <div class="user-profile">
+        <div class="avatar">SO</div>
+        <div>
+          <div style="font-weight: 600; font-size: 14px;">Sarah O'Conner</div>
+          <div style="font-size: 12px; color: var(--host-muted);">Senior Account Executive</div>
+        </div>
+      </div>
+    </header>
+
+    <div class="dashboard-body">
+      <!-- Announcement Banner with Direct Trigger -->
+      <div class="banner-card">
+        <div>
+          <h2 class="banner-title">🎙️ Aura Voice AI Assistant is Active</h2>
+          <p class="banner-desc">
+            The embeddable <code>&lt;aura-voice-agent&gt;</code> Web Component is running in the bottom-right corner. Click the button or tap the bottom-right blue mic launcher:
+          </p>
+        </div>
+        <button class="banner-btn" data-aura-open onclick="window.AuraVoice && window.AuraVoice.open()">
+          Open Voice Assistant ➔
+        </button>
+      </div>
+
+      <!-- KPI Metric Cards -->
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-label">Quarterly Revenue</div>
+          <div class="kpi-value">$2,410,500</div>
+          <div class="kpi-sub">+18.4% vs last quarter</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Active Deals</div>
+          <div class="kpi-value">48 Deals</div>
+          <div class="kpi-sub">8 Closing this week</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Win Rate</div>
+          <div class="kpi-value">64.2%</div>
+          <div class="kpi-sub">+4.1% MoM</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Average Deal Size</div>
+          <div class="kpi-value">$85,200</div>
+          <div class="kpi-sub">Enterprise tier</div>
+        </div>
+      </div>
+
+      <!-- Pipeline Deals Table -->
+      <div class="table-card">
+        <div class="table-header">
+          <h3 class="table-title">Recent High-Priority Accounts</h3>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Company</th>
+              <th>Primary Contact</th>
+              <th>Deal Size</th>
+              <th>Stage</th>
+              <th>Probability</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Stellar Dynamics</strong></td>
+              <td>Marcus Vance (CTO)</td>
+              <td>$350,000</td>
+              <td><span class="badge badge-progress">Contract Review</span></td>
+              <td>90%</td>
+            </tr>
+            <tr>
+              <td><strong>Horizon Cloud Corp</strong></td>
+              <td>Elena Rostova (VP Eng)</td>
+              <td>$185,000</td>
+              <td><span class="badge badge-success">Verbal Agreement</span></td>
+              <td>95%</td>
+            </tr>
+            <tr>
+              <td><strong>Quantum Fintech</strong></td>
+              <td>David Chen (CISO)</td>
+              <td>$420,000</td>
+              <td><span class="badge badge-lead">Discovery Call</span></td>
+              <td>40%</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <!-- 2. Drop-in Embeddable Web Component Tag -->
+  <aura-voice-agent
+    id="voiceAgent"
+    agent-endpoint="ws://localhost:8000/ws/proxy/crm-demo-session"
+    theme="dark"
+    voice-id="aura-advisor">
+  </aura-voice-agent>
+
+</body>
+</html>
