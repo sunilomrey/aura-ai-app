@@ -1,29 +1,16 @@
 """
 Aura AI — Real-Time Voice Agent & Proxy Orchestrator Backend
 =============================================================
+Specialized Stage Demo Flow:
+Showcasing Telemetry-Driven Semantic Audio Compression (T-SAC)
+for Enterprise Telecom Edge Infrastructure.
 
-A FastAPI WebSocket server that provides:
-1. Direct Voice Agent WebSocket: `/ws/voice/{session_id}`
-2. Third-Party Proxy Orchestrator: `/ws/proxy/{session_id}`
-3. Static Web Component & Demo Host: `/public/widget.js`, `/demo`
-
-Pipeline Architecture:
-    Client Audio (PCM) ──► Mock STT ──► forward_to_agent() ──► Mock TTS ──► Client Audio (PCM)
-
-Protocol
---------
-Client → Server:
-  - Binary:  Raw 16kHz 16-bit mono PCM audio chunks
-  - JSON:    {"type": "session_init", "voice_id": "..."}   Start the session
-  - JSON:    {"type": "stop_audio"}                        User stopped speaking
-  - JSON:    {"type": "client_barge_in"}                   Interrupt agent mid-stream
-
-Server → Client:
-  - JSON:    {"type": "state_change",  "state": "<state>"}
-  - JSON:    {"type": "transcript_stream", "payload": {...}}
-  - JSON:    {"type": "transcript_interim", "payload": {...}}
-  - JSON:    {"type": "flush_audio_buffer"}
-  - Binary:  b"AURA" + dummy PCM bytes  (4-byte ASCII header for identification)
+Flow:
+1. Baseline Trigger: "Aura, what are the steps to reroute traffic from a failing edge server?"
+2. Extended Telecom Ops Response (15-20s duration with 0.8s sentence cadence).
+3. Crisis Trigger: Ctrl+Shift+D -> RTT: 1250ms.
+4. Instant Semantic Truncation -> "\\n\\n[Bandwidth critical. Switching to low-latency stream. Reroute command executed.]"
+5. High-visibility projector log: "[CRITICAL] SYSTEM_OVERRIDE: T-SAC Engaged."
 """
 
 import asyncio
@@ -33,13 +20,15 @@ import math
 import os
 import struct
 import time
+import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
 # Logging Setup
@@ -51,9 +40,85 @@ logging.basicConfig(
 logger = logging.getLogger("aura-backend")
 
 # ---------------------------------------------------------------------------
-# FastAPI Application & CORS
+# Mock Edge Node Inventory (Enterprise Telecom Data)
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Aura AI Voice & Proxy Orchestrator", version="0.2.0")
+EDGE_NODE_INVENTORY = [
+    {
+        "node_id": "MEC-BLR-01",
+        "region": "ap-south-1 (Bengaluru)",
+        "role": "5G UPF / Edge Compute",
+        "status": "CRITICAL",
+        "active_alarms": ["BGP_ROUTE_FLAP", "HIGH_LATENCY"],
+        "cpu_load": "94%",
+        "failover_target": "MEC-MUM-02",
+    },
+    {
+        "node_id": "MEC-MUM-02",
+        "region": "ap-south-2 (Mumbai)",
+        "role": "AIOps Control Plane",
+        "status": "HEALTHY",
+        "active_alarms": [],
+        "cpu_load": "42%",
+        "failover_target": "None",
+    },
+]
+
+# ---------------------------------------------------------------------------
+# Database Schema & Telemetry Models (T-SAC Feature)
+# ---------------------------------------------------------------------------
+class TurnTelemetry(BaseModel):
+    """
+    Database schema / model for recording turn-by-turn conversation telemetry,
+    including network health, bandwidth throttling, and latency stats.
+    """
+    turn_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    session_id: str
+    timestamp: float = Field(default_factory=time.time)
+    user_query: str
+    agent_response: str
+    duration_ms: int = 0
+    network_throttle_engaged: bool = False
+    rtt_at_throttle_ms: Optional[int] = None
+    codec_sample_rate: int = 16000
+
+
+# In-memory database table storing turn telemetry
+turn_telemetry_db: List[TurnTelemetry] = []
+
+
+def log_turn_telemetry(
+    session: "SessionState",
+    user_query: str,
+    agent_response: str,
+    start_time: float,
+) -> TurnTelemetry:
+    """Store turn telemetry into database and log structured stats."""
+    duration_ms = int((time.time() - start_time) * 1000)
+    record = TurnTelemetry(
+        session_id=session.session_id,
+        user_query=user_query,
+        agent_response=agent_response,
+        duration_ms=duration_ms,
+        network_throttle_engaged=session.network_throttle_engaged,
+        rtt_at_throttle_ms=session.rtt_at_throttle_ms,
+        codec_sample_rate=8000 if session.is_degraded else 16000,
+    )
+    turn_telemetry_db.append(record)
+    logger.info(
+        "Session %s — [DB TELEMETRY STORED] turn_id=%s, throttled=%s, rtt=%s ms, codec=%d Hz",
+        session.session_id,
+        record.turn_id,
+        record.network_throttle_engaged,
+        record.rtt_at_throttle_ms,
+        record.codec_sample_rate,
+    )
+    return record
+
+
+# ---------------------------------------------------------------------------
+# FastAPI Application & Static Mounts
+# ---------------------------------------------------------------------------
+app = FastAPI(title="Aura AI Voice & Proxy Orchestrator with T-SAC", version="0.4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -63,18 +128,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Static directory setup
 BASE_DIR = Path(__file__).resolve().parent
 PUBLIC_DIR = BASE_DIR / "public"
 PUBLIC_DIR.mkdir(exist_ok=True)
 
 app.mount("/public", StaticFiles(directory=str(PUBLIC_DIR)), name="public")
+app.mount("/static", StaticFiles(directory=str(PUBLIC_DIR)), name="static")
 
 
 @app.get("/health")
 async def health_check():
-    """Simple health-check endpoint."""
-    return {"status": "ok", "service": "aura-voice-proxy-backend", "version": "0.2.0"}
+    """Health-check endpoint reporting service status and T-SAC readiness."""
+    return {
+        "status": "ok",
+        "service": "aura-voice-proxy-backend",
+        "version": "0.4.0",
+        "features": ["T-SAC", "telecom_edge_demo", "telemetry_polling", "semantic_truncation", "codec_swap_8khz"],
+    }
 
 
 @app.get("/demo")
@@ -83,16 +153,36 @@ async def serve_demo():
     demo_file = PUBLIC_DIR / "demo.html"
     if demo_file.exists():
         return FileResponse(str(demo_file))
-    return {"error": "demo.html not yet generated in public directory"}
+    return {"error": "demo.html not found in public directory"}
+
+
+@app.get("/api/edge-nodes")
+async def get_edge_nodes():
+    """Return inventory of enterprise edge nodes."""
+    return {
+        "count": len(EDGE_NODE_INVENTORY),
+        "nodes": EDGE_NODE_INVENTORY,
+    }
+
+
+@app.get("/api/telemetry")
+async def get_telemetry_records():
+    """Return all stored TurnTelemetry database records."""
+    return {
+        "count": len(turn_telemetry_db),
+        "records": [r.dict() for r in turn_telemetry_db],
+    }
 
 
 # ---------------------------------------------------------------------------
-# Constants & Audio Configuration
+# Audio Constants
 # ---------------------------------------------------------------------------
-AUDIO_HEADER = b"AURA"
-SAMPLE_RATE = 16000           # 16 kHz
+AUDIO_HEADER_16K = b"AURA"    # Standard 16kHz audio header
+AUDIO_HEADER_8K = b"A8KH"     # T-SAC Low-bandwidth 8kHz audio header
+
+SAMPLE_RATE_16K = 16000       # 16 kHz
+SAMPLE_RATE_8K = 8000         # 8 kHz
 SAMPLE_WIDTH = 2              # 16-bit (2 bytes per sample)
-BYTES_PER_SECOND = SAMPLE_RATE * SAMPLE_WIDTH  # 32000 bytes/sec
 
 # Simulated timing (seconds)
 STT_SILENCE_TIMEOUT = 2.0     # Max seconds of audio before auto-transcribe
@@ -103,21 +193,86 @@ LLM_WORD_DELAY = 0.08         # Delay between streamed tokens
 
 # TTS audio chunk sizing
 TTS_FRAME_DURATION = 0.1      # 100ms per audio frame
-TTS_FRAME_SIZE = int(BYTES_PER_SECOND * TTS_FRAME_DURATION)  # 3200 bytes
-TTS_FRAMES_PER_WORD = 3       # 3 frames (300ms audio) per word
-
-MOCK_DEFAULT_RESPONSE = (
-    "This is a hardcoded agent response that simulates "
-    "realistic streaming latency from a large language model."
-)
+TTS_FRAMES_PER_WORD = 2       # 2 frames (200ms audio) per word
 
 MOCK_INTERIM_PARTIALS = [
-    "Tell",
-    "Tell me",
-    "Tell me about",
-    "Tell me about the recent",
-    "Tell me about the recent quarterly updates.",
+    "Aura,",
+    "Aura, what are the",
+    "Aura, what are the steps to reroute",
+    "Aura, what are the steps to reroute traffic from a failing edge server?",
 ]
+
+# ---------------------------------------------------------------------------
+# Route Response Scripts & Keyword-Based Mock LLM Router
+# ---------------------------------------------------------------------------
+ROUTE_HARDWARE_PROVISIONING = (
+    "Scanning configuration templates for the Koramangala subnet. "
+    "I found template v4. Applying zero-touch provisioning now. "
+    "The router will reboot and join the mesh in approximately 45 seconds."
+)
+
+ROUTE_SLA_VALIDATION = (
+    "Yes. The node was offline for 14 minutes, which exceeds the 99.99% uptime guarantee for this month. "
+    "I have drafted a penalty claim for $12,500. Would you like me to submit it to billing?"
+)
+
+ROUTE_TSAC_REROUTE = (
+    "To reroute traffic from a failing MEC node, we must first isolate the affected subnet. "
+    "Step one: Verify the BGP routing tables. "
+    "Step two: Initiate a DNS failover to the secondary region. "
+    "Step three: Drain active connections. "
+    "Step four: Rebalance traffic across edge clusters. "
+    "Step five: Run health check diagnostics on backup gateways."
+)
+
+
+def route_llm_response(text: str) -> str:
+    """
+    Keyword-Based Mock LLM Router:
+    - Route 1 (Hardware Provisioning): If input contains 'configure' or 'router'
+    - Route 2 (SLA Validation): If input contains 'sla' or 'breach'
+    - Route 3 (T-SAC Pitch - Default/Reroute): If input contains 'reroute' or 'failing' (or default fallback)
+    """
+    lower = text.lower()
+    if "configure" in lower or "router" in lower:
+        return ROUTE_HARDWARE_PROVISIONING
+    elif "sla" in lower or "breach" in lower:
+        return ROUTE_SLA_VALIDATION
+    elif "reroute" in lower or "failing" in lower:
+        return ROUTE_TSAC_REROUTE
+    return ROUTE_TSAC_REROUTE
+
+
+# ---------------------------------------------------------------------------
+# Terminal Telemetry Logging (Stage Console Display)
+# ---------------------------------------------------------------------------
+def print_tsac_degrade_telemetry() -> None:
+    """
+    Instantly print color-coded sequence to server console when network_degrade is triggered:
+    [WARN] WebSocket RTT: 850ms | Jitter: 150ms | Bandwidth: 256 kbps
+    [ERROR] WebSocket RTT: 1420ms | Packet Loss: 18% | Bandwidth: 64 kbps
+    [CRITICAL] SYSTEM_OVERRIDE: T-SAC Engaged.
+    [CRITICAL] ACTION: Truncating Semantic Pipeline.
+    [CRITICAL] ACTION: Fallback to 8kHz PCM Audio Stream.
+    """
+    print("\n\033[93m[WARN] WebSocket RTT: 850ms | Jitter: 150ms | Bandwidth: 256 kbps\033[0m", flush=True)
+    print("\033[91m[ERROR] WebSocket RTT: 1420ms | Packet Loss: 18% | Bandwidth: 64 kbps\033[0m", flush=True)
+    print("\033[91m\033[1m[CRITICAL] SYSTEM_OVERRIDE: T-SAC Engaged.\033[0m", flush=True)
+    print("\033[91m\033[1m[CRITICAL] ACTION: Truncating Semantic Pipeline.\033[0m", flush=True)
+    print("\033[93m\033[1m[CRITICAL] ACTION: Fallback to 8kHz PCM Audio Stream.\033[0m\n", flush=True)
+
+
+async def live_telemetry_monitor(session: "SessionState") -> None:
+    """
+    Asynchronous background task that prints mock healthy network telemetry to the server console.
+    """
+    try:
+        while True:
+            await asyncio.sleep(3.0)
+            if not session.is_degraded:
+                print("\033[36m[INFO] WebSocket RTT: 42ms | Jitter: 2ms | Bandwidth: 45 Mbps\033[0m", flush=True)
+    except asyncio.CancelledError:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +282,7 @@ def generate_tone_pcm(
     frequency: float = 440.0,
     duration_s: float = 0.1,
     amplitude: float = 0.25,
-    sample_rate: int = SAMPLE_RATE,
+    sample_rate: int = SAMPLE_RATE_16K,
 ) -> bytes:
     """Generate 16-bit signed PCM sine-wave bytes for audible test streaming."""
     num_samples = int(sample_rate * duration_s)
@@ -151,6 +306,13 @@ class SessionState:
         self.voice_id = voice_id or "aura-default"
         self.state: str = "IDLE"
 
+        # T-SAC State & Telemetry flags
+        self.is_degraded: bool = False
+        self.degraded_logged: bool = False
+        self.network_throttle_engaged: bool = False
+        self.rtt_at_throttle_ms: Optional[int] = None
+        self.last_user_query: str = ""
+
         # Audio buffer
         self.audio_buffer = bytearray()
         self.audio_start_time: Optional[float] = None
@@ -159,6 +321,7 @@ class SessionState:
         # Background tasks
         self.pipeline_task: Optional[asyncio.Task] = None
         self.interim_task: Optional[asyncio.Task] = None
+        self.telemetry_task: Optional[asyncio.Task] = None
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +343,7 @@ async def send_state(ws: WebSocket, session: SessionState, new_state: str) -> No
 
 
 # ---------------------------------------------------------------------------
-# Mock STT (Speech-to-Text) Service
+# Mock STT Service
 # ---------------------------------------------------------------------------
 async def stream_interim_transcripts(ws: WebSocket, session: SessionState) -> None:
     """Stream progressive interim partial transcripts during user speech."""
@@ -209,7 +372,6 @@ async def mock_stt(ws: WebSocket, session: SessionState) -> str:
     """Process buffered audio and return the final user transcript."""
     await send_state(ws, session, "PROCESSING_STT")
 
-    # Cancel any running interim generator
     if session.interim_task and not session.interim_task.done():
         session.interim_task.cancel()
         try:
@@ -220,7 +382,8 @@ async def mock_stt(ws: WebSocket, session: SessionState) -> str:
 
     await asyncio.sleep(STT_FINAL_DELAY)
 
-    user_text = "Tell me about the recent quarterly updates."
+    user_text = "Aura, what are the steps to reroute traffic from a failing edge server?"
+    session.last_user_query = user_text
 
     logger.info(
         "Session %s — Mock STT complete (%d chunks, %d bytes). User: '%s'",
@@ -244,59 +407,96 @@ async def mock_stt(ws: WebSocket, session: SessionState) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Third-Party Proxy Webhook Dispatcher
+# ---------------------------------------------------------------------------
+# Third-Party Proxy Webhook Dispatcher / Keyword LLM Router
 # ---------------------------------------------------------------------------
 async def forward_to_agent(text: str, session_id: str, voice_id: Optional[str] = None) -> str:
     """
-    Simulate forwarding the transcribed text to a third-party webhook/agent workflow
-    (e.g., LangGraph, n8n, Flowise, or CRM backend) and returning the resulting response.
+    Simulate forwarding the transcribed text to third-party agent webhook / LLM router.
+    Routes queries based on enterprise telecom keywords.
     """
     logger.info(
         "Session %s — [PROXY FORWARD] Dispatching to external agent webhook: '%s' (voice_id=%s)",
         session_id, text, voice_id,
     )
 
-    # Simulate network latency of external webhook
     await asyncio.sleep(0.25)
-
-    lower = text.lower()
-    if "quarterly" in lower or "updates" in lower or "report" in lower:
-        return (
-            "Based on the latest Q3 reports, customer retention has increased by 14% "
-            "and European expansion is progressing ahead of schedule."
-        )
-    elif "schedule" in lower or "meeting" in lower or "calendar" in lower:
-        return "You have two meetings scheduled today: Team Standup at 10 AM and Client Review at 3 PM."
-    elif "crm" in lower or "deal" in lower or "lead" in lower:
-        return "I synchronized with the CRM. You have 5 new qualified enterprise leads awaiting follow-up."
-    else:
-        return (
-            f"The proxy agent received your request regarding '{text}' "
-            "and executed the workflow action successfully."
-        )
+    return route_llm_response(text)
 
 
 # ---------------------------------------------------------------------------
-# Mock LLM & TTS Streaming Pipeline
+# Mock LLM & TTS Streaming Pipeline (with T-SAC Semantic Truncation & Codec Swap)
 # ---------------------------------------------------------------------------
 async def mock_streaming_tts_pipeline(
     ws: WebSocket, session: SessionState, response_text: str
 ) -> None:
-    """Stream response tokens and concurrent TTS PCM audio frames to the client."""
+    """
+    Stream response tokens and concurrent TTS PCM audio frames.
+    For the telecom stage demo, pauses 0.8s between sentences to create realistic presentation pacing.
+    If session.is_degraded is True, instantly breaks and swaps to 8kHz low-latency stream.
+    """
+    turn_start_time = time.time()
     await send_state(ws, session, "STREAMING_LLM_TTS")
 
     logger.info("Session %s — Agent thinking (%.0fms)…", session.session_id, LLM_THINKING_DELAY * 1000)
     await asyncio.sleep(LLM_THINKING_DELAY)
 
+    # ── Single Start Beep (Signal agent start) ───────────────────────────
+    start_beep = AUDIO_HEADER_16K + generate_tone_pcm(
+        frequency=587.33,
+        duration_s=0.08,
+        amplitude=0.2,
+        sample_rate=SAMPLE_RATE_16K,
+    )
+    try:
+        await ws.send_bytes(start_beep)
+    except Exception:
+        return
+
     words = response_text.split()
     total_words = len(words)
-    base_freq = 360.0
-    freq_step = 8.0
+    final_spoken_words = []
 
     for idx, word in enumerate(words):
+        # ── T-SAC Semantic Truncation Check (Mid-generation Interception) ───
+        if session.is_degraded:
+            if not session.degraded_logged:
+                print_tsac_degrade_telemetry()
+                session.degraded_logged = True
+            logger.warning("Session %s — [CRITICAL] T-SAC Engaged. TTS Codec Swapped to 8kHz.", session.session_id)
+
+            # Send 8kHz low-fidelity audio burst first
+            tone_pcm_8k = generate_tone_pcm(
+                frequency=320.0,
+                duration_s=0.15,
+                amplitude=0.2,
+                sample_rate=SAMPLE_RATE_8K,
+            )
+            frame_data_8k = AUDIO_HEADER_8K + tone_pcm_8k
+            try:
+                await ws.send_bytes(frame_data_8k)
+            except Exception:
+                pass
+
+            truncation_text = "\n\n[Bandwidth critical. Switching to low-latency stream. Reroute command executed.]"
+            final_spoken_words.append(truncation_text)
+
+            # Instantly break the loop and emit the fallback script
+            await send_json(ws, {
+                "type": "transcript_stream",
+                "payload": {
+                    "speaker": "agent",
+                    "text": truncation_text,
+                    "is_final": True,
+                    "is_truncated": True,
+                },
+            })
+            break
+
+        final_spoken_words.append(word)
         is_final = idx == total_words - 1
 
-        # Send word transcript
+        # Send standard word transcript
         await send_json(ws, {
             "type": "transcript_stream",
             "payload": {
@@ -308,26 +508,38 @@ async def mock_streaming_tts_pipeline(
             },
         })
 
-        # Send TTS audio frames
-        word_freq = base_freq + (idx % 10) * freq_step
-        for frame_idx in range(TTS_FRAMES_PER_WORD):
-            tone_pcm = generate_tone_pcm(
-                frequency=word_freq,
-                duration_s=TTS_FRAME_DURATION,
-            )
-            frame_data = AUDIO_HEADER + tone_pcm
-            try:
-                await ws.send_bytes(frame_data)
-            except Exception:
-                return
-
-            if frame_idx < TTS_FRAMES_PER_WORD - 1:
-                await asyncio.sleep(0.015)
-
         if not is_final:
-            await asyncio.sleep(LLM_WORD_DELAY)
+            # If word ends a sentence, pause 0.8s to give presenter time to speak to judges
+            if word.endswith(".") or word.endswith("...") or word.endswith("?"):
+                await asyncio.sleep(0.8)
+            else:
+                await asyncio.sleep(LLM_WORD_DELAY)
 
+    # ── Single Finish Beep (Signal agent completion) ─────────────────────
+    finish_sample_rate = SAMPLE_RATE_8K if session.is_degraded else SAMPLE_RATE_16K
+    finish_header = AUDIO_HEADER_8K if session.is_degraded else AUDIO_HEADER_16K
+    finish_beep = finish_header + generate_tone_pcm(
+        frequency=440.0,
+        duration_s=0.08,
+        amplitude=0.2,
+        sample_rate=finish_sample_rate,
+    )
+    try:
+        await ws.send_bytes(finish_beep)
+    except Exception:
+        pass
+
+    complete_agent_text = " ".join(final_spoken_words)
     logger.info("Session %s — Agent response complete.", session.session_id)
+
+    # Record turn telemetry in database
+    log_turn_telemetry(
+        session=session,
+        user_query=session.last_user_query,
+        agent_response=complete_agent_text,
+        start_time=turn_start_time,
+    )
+
     await send_state(ws, session, "IDLE")
 
 
@@ -360,29 +572,31 @@ async def handle_barge_in(ws: WebSocket, session: SessionState) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Proxy Pipeline Runner (STT ──► forward_to_agent ──► TTS)
+# Pipeline Runners
 # ---------------------------------------------------------------------------
-async def run_proxy_pipeline(ws: WebSocket, session: SessionState) -> None:
-    """Execute the proxy pipeline: STT -> forward_to_agent() -> TTS."""
-    user_text = await mock_stt(ws, session)
-    agent_response = await forward_to_agent(user_text, session.session_id, session.voice_id)
+async def run_proxy_pipeline(ws: WebSocket, session: SessionState, custom_text: Optional[str] = None) -> None:
+    """Execute proxy pipeline: STT -> forward_to_agent() -> TTS."""
+    if custom_text:
+        user_text = custom_text
+        session.last_user_query = custom_text
+    else:
+        user_text = await mock_stt(ws, session)
 
+    agent_response = await forward_to_agent(user_text, session.session_id, session.voice_id)
     session.pipeline_task = asyncio.create_task(
         mock_streaming_tts_pipeline(ws, session, agent_response)
     )
 
 
 async def run_default_pipeline(ws: WebSocket, session: SessionState) -> None:
-    """Execute default mock pipeline."""
+    """Execute default mock pipeline with keyword routing."""
     user_text = await mock_stt(ws, session)
+    response_text = route_llm_response(user_text)
     session.pipeline_task = asyncio.create_task(
-        mock_streaming_tts_pipeline(ws, session, MOCK_DEFAULT_RESPONSE)
+        mock_streaming_tts_pipeline(ws, session, response_text)
     )
 
 
-# ---------------------------------------------------------------------------
-# Silence Auto-trigger Timer
-# ---------------------------------------------------------------------------
 async def audio_silence_timer(ws: WebSocket, session: SessionState, is_proxy: bool = False) -> None:
     """Auto-trigger STT processing if silence timeout is reached."""
     await asyncio.sleep(STT_SILENCE_TIMEOUT)
@@ -409,11 +623,12 @@ async def proxy_websocket(
 ):
     """
     WebSocket endpoint for third-party embeddable clients (e.g. widget.js).
-    Routes incoming audio to STT, invokes forward_to_agent(), and streams TTS back.
+    Supports live terminal telemetry monitor, T-SAC ping/pong, mock_user_speech, and network_degrade.
     """
     await ws.accept()
     session = SessionState(session_id, voice_id=voice_id)
     silence_timer_task: Optional[asyncio.Task] = None
+    session.telemetry_task = asyncio.create_task(live_telemetry_monitor(session))
 
     logger.info("Session %s — [PROXY WS] Client connected (voice_id=%s).", session_id, session.voice_id)
 
@@ -445,9 +660,6 @@ async def proxy_websocket(
                         stream_interim_transcripts(ws, session)
                     )
 
-                logger.debug("Session %s — [PROXY] Audio chunk #%d (%d bytes)",
-                             session_id, session.audio_chunk_count, len(audio_chunk))
-
             # JSON control signal
             elif "text" in message and message["text"] is not None:
                 try:
@@ -457,11 +669,56 @@ async def proxy_websocket(
                     continue
 
                 msg_type = data.get("type", "")
-                logger.info("Session %s — [PROXY] Control message: %s", session_id, msg_type)
 
-                if msg_type == "session_init":
+                # ── T-SAC Telemetry Ping/Pong ────────────────────────────
+                if msg_type == "ping":
+                    ts = data.get("timestamp", time.time() * 1000)
+                    await send_json(ws, {"type": "pong", "timestamp": ts})
+
+                # ── T-SAC Network Degradation Control Signal ──────────────
+                elif msg_type == "network_degrade":
+                    rtt = data.get("payload", {}).get("rtt", 1250)
+                    session.is_degraded = True
+                    session.network_throttle_engaged = True
+                    session.rtt_at_throttle_ms = int(rtt)
+                    if not session.degraded_logged:
+                        print_tsac_degrade_telemetry()
+                        session.degraded_logged = True
+                    logger.warning(
+                        "Session %s — [T-SAC] network_degrade received! RTT: %d ms. Setting is_degraded=True.",
+                        session_id, session.rtt_at_throttle_ms,
+                    )
+                    await send_json(ws, {
+                        "type": "network_status",
+                        "is_degraded": True,
+                        "rtt": session.rtt_at_throttle_ms,
+                        "message": "⚠️ Low Bandwidth: Audio optimized.",
+                    })
+
+                # ── Hackathon Stage Demo Mock Speech Trigger ─────────────
+                elif msg_type == "mock_user_speech":
+                    text = data.get("text", "Aura, what are the steps to reroute traffic from a failing edge server?")
+                    session.last_user_query = text
+                    logger.info("Session %s — [STAGE DEMO TRIGGER] User query: '%s'", session_id, text)
+                    await send_json(ws, {
+                        "type": "transcript_stream",
+                        "payload": {
+                            "speaker": "user",
+                            "text": text,
+                            "is_final": True,
+                        },
+                    })
+                    # Dispatch directly to pipeline with zero delay
+                    await run_proxy_pipeline(ws, session, custom_text=text)
+
+                elif msg_type == "session_init":
                     if "voice_id" in data:
                         session.voice_id = data["voice_id"]
+                    # Clean reset state on session_init
+                    session.is_degraded = False
+                    session.degraded_logged = False
+                    session.network_throttle_engaged = False
+                    session.rtt_at_throttle_ms = None
                     await send_state(ws, session, "LISTENING")
                     await send_json(ws, {
                         "type": "session_ready",
@@ -493,14 +750,14 @@ async def proxy_websocket(
     except Exception as exc:
         logger.exception("Session %s — [PROXY] Unexpected error: %s", session_id, exc)
     finally:
-        for task in [silence_timer_task, session.pipeline_task, session.interim_task]:
+        for task in [silence_timer_task, session.pipeline_task, session.interim_task, session.telemetry_task]:
             if task and not task.done():
                 task.cancel()
         logger.info("Session %s — [PROXY] Session closed.", session_id)
 
 
 # ---------------------------------------------------------------------------
-# Route 2: Default Voice Agent WebSocket (/ws/voice/{session_id})
+# Route 2: Direct Voice Agent WebSocket (/ws/voice/{session_id})
 # ---------------------------------------------------------------------------
 @app.websocket("/ws/voice/{session_id}")
 async def voice_websocket(ws: WebSocket, session_id: str):
@@ -508,6 +765,7 @@ async def voice_websocket(ws: WebSocket, session_id: str):
     await ws.accept()
     session = SessionState(session_id)
     silence_timer_task: Optional[asyncio.Task] = None
+    session.telemetry_task = asyncio.create_task(live_telemetry_monitor(session))
 
     logger.info("Session %s — [DIRECT WS] Client connected.", session_id)
 
@@ -546,7 +804,47 @@ async def voice_websocket(ws: WebSocket, session_id: str):
 
                 msg_type = data.get("type", "")
 
-                if msg_type == "session_init":
+                if msg_type == "ping":
+                    ts = data.get("timestamp", time.time() * 1000)
+                    await send_json(ws, {"type": "pong", "timestamp": ts})
+
+                elif msg_type == "network_degrade":
+                    rtt = data.get("payload", {}).get("rtt", 1250)
+                    session.is_degraded = True
+                    session.network_throttle_engaged = True
+                    session.rtt_at_throttle_ms = int(rtt)
+                    if not session.degraded_logged:
+                        print_tsac_degrade_telemetry()
+                        session.degraded_logged = True
+                    logger.warning("Session %s — [T-SAC] network_degrade engaged! RTT: %d ms", session_id, session.rtt_at_throttle_ms)
+                    await send_json(ws, {
+                        "type": "network_status",
+                        "is_degraded": True,
+                        "rtt": session.rtt_at_throttle_ms,
+                        "message": "⚠️ Low Bandwidth: Audio optimized.",
+                    })
+
+                elif msg_type == "mock_user_speech":
+                    text = data.get("text", "Aura, what are the steps to reroute traffic from a failing edge server?")
+                    session.last_user_query = text
+                    await send_json(ws, {
+                        "type": "transcript_stream",
+                        "payload": {
+                            "speaker": "user",
+                            "text": text,
+                            "is_final": True,
+                        },
+                    })
+                    agent_response = await forward_to_agent(text, session.session_id, session.voice_id)
+                    session.pipeline_task = asyncio.create_task(
+                        mock_streaming_tts_pipeline(ws, session, agent_response)
+                    )
+
+                elif msg_type == "session_init":
+                    session.is_degraded = False
+                    session.degraded_logged = False
+                    session.network_throttle_engaged = False
+                    session.rtt_at_throttle_ms = None
                     await send_state(ws, session, "LISTENING")
                     await send_json(ws, {
                         "type": "session_ready",
@@ -571,7 +869,7 @@ async def voice_websocket(ws: WebSocket, session_id: str):
     except Exception as exc:
         logger.exception("Session %s — Unexpected error: %s", session_id, exc)
     finally:
-        for task in [silence_timer_task, session.pipeline_task, session.interim_task]:
+        for task in [silence_timer_task, session.pipeline_task, session.interim_task, session.telemetry_task]:
             if task and not task.done():
                 task.cancel()
         logger.info("Session %s — Session closed.", session_id)

@@ -1,24 +1,27 @@
 /**
  * Aura Voice Agent — Embeddable Web Component (widget.js)
  * =========================================================
- * A zero-dependency, plug-and-play Custom Element with Shadow DOM encapsulation.
+ * Specialized Stage Demo:
+ * Showcasing Telemetry-Driven Semantic Audio Compression (T-SAC).
  *
- * Usage:
- *   <script src="http://localhost:8000/public/widget.js"></script>
- *   <aura-voice-agent
- *     agent-endpoint="ws://localhost:8000/ws/proxy/crm-session"
- *     theme="dark"
- *     voice-id="aura-advisor">
- *   </aura-voice-agent>
+ * Demo Shortcuts & Controls:
+ * - Baseline Trigger: Double-click microphone launcher OR press Ctrl + Shift + S
+ *   (Sends: "Aura, what are the steps to reroute traffic from a failing edge server?")
+ * - Crisis Trigger: Press Ctrl + Shift + D (or Cmd + Shift + D)
+ *   (Sends: network_degrade with RTT: 1250ms -> Truncates LLM & Swaps TTS Codec to 8kHz)
+ * - Visual Proof: Injects amber banner "⚠️ Low Bandwidth: Audio optimized."
  */
 
 (function () {
   'use strict';
 
-  console.log('[Aura Widget] Loading widget.js v2.1...');
+  console.log('[Aura Widget] Loading Stage Demo widget.js bundle (T-SAC Ready)...');
 
-  const SAMPLE_RATE = 16000;
-  const AUDIO_HEADER_STR = 'AURA';
+  const SAMPLE_RATE_16K = 16000;
+  const SAMPLE_RATE_8K = 8000;
+  const AUDIO_HEADER_16K = 'AURA';
+  const AUDIO_HEADER_8K = 'A8KH';
+  const DEMO_QUERY_TEXT = "Aura, what are the steps to reroute traffic from a failing edge server?";
 
   // -------------------------------------------------------------------------
   // Component Template & Styles (100% Shadow DOM Encapsulated)
@@ -38,6 +41,9 @@
         --primary: #8ed5ff;
         --primary-glow: rgba(142, 213, 255, 0.45);
         --secondary: #5de6ff;
+        --amber-warning: #fbbf24;
+        --amber-bg: rgba(251, 191, 36, 0.16);
+        --amber-border: rgba(251, 191, 36, 0.5);
         --error: #ffb4ab;
         --error-bg: rgba(255, 180, 171, 0.15);
         --bg-dark: #0b1326;
@@ -118,7 +124,7 @@
         right: 76px;
         background: rgba(15, 23, 42, 0.95);
         color: #f1f5f9;
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 600;
         padding: 6px 12px;
         border-radius: 8px;
@@ -141,7 +147,7 @@
         position: absolute;
         bottom: 80px;
         right: 0;
-        width: 390px;
+        width: 410px;
         max-width: calc(100vw - 48px);
         background: var(--card-bg);
         backdrop-filter: blur(24px);
@@ -184,6 +190,12 @@
         font-size: 13px;
         font-weight: 800;
         letter-spacing: 1.5px;
+      }
+
+      .header-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
       }
 
       .status-pill {
@@ -235,19 +247,59 @@
         color: var(--text-main);
       }
 
+      /* ── T-SAC Low Bandwidth Amber Warning Banner ────────── */
+      .bandwidth-banner {
+        display: none;
+        align-items: center;
+        justify-content: space-between;
+        background: var(--amber-bg);
+        border: 1.5px solid var(--amber-border);
+        color: var(--amber-warning);
+        font-size: 11px;
+        font-weight: 700;
+        padding: 9px 16px;
+        margin: 12px 20px 0;
+        border-radius: 10px;
+        letter-spacing: 0.3px;
+        animation: amber-glow 1.8s infinite alternate;
+      }
+
+      .bandwidth-banner.visible {
+        display: flex;
+      }
+
+      .bandwidth-left {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .rtt-tag {
+        font-size: 10px;
+        background: rgba(0, 0, 0, 0.35);
+        padding: 2px 7px;
+        border-radius: 4px;
+        font-family: monospace;
+      }
+
+      @keyframes amber-glow {
+        0% { box-shadow: 0 0 6px rgba(251, 191, 36, 0.25); }
+        100% { box-shadow: 0 0 18px rgba(251, 191, 36, 0.6); }
+      }
+
       /* ── Visualizer & Orb Stage ─────────────────────────── */
       .orb-stage {
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        padding: 24px 20px 16px;
+        padding: 18px 20px 12px;
         position: relative;
       }
 
       .orb-container {
-        width: 100px;
-        height: 100px;
+        width: 90px;
+        height: 90px;
         position: relative;
         display: flex;
         align-items: center;
@@ -265,8 +317,8 @@
       }
 
       .orb-core {
-        width: 64px;
-        height: 64px;
+        width: 58px;
+        height: 58px;
         border-radius: 50%;
         background: linear-gradient(135deg, #38bdf8, #6366f1);
         box-shadow: inset 0 0 20px rgba(255, 255, 255, 0.6), 0 0 30px var(--primary-glow);
@@ -305,8 +357,8 @@
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 14px;
         padding: 14px;
-        min-height: 90px;
-        max-height: 150px;
+        min-height: 100px;
+        max-height: 160px;
         overflow-y: auto;
         display: flex;
         flex-direction: column;
@@ -338,6 +390,16 @@
       .msg-text.interim {
         color: var(--text-muted);
         font-style: italic;
+      }
+
+      .msg-text.truncated {
+        color: var(--amber-warning);
+        font-weight: 700;
+        background: rgba(251, 191, 36, 0.1);
+        padding: 4px 8px;
+        border-radius: 6px;
+        border-left: 3px solid var(--amber-warning);
+        margin-top: 4px;
       }
 
       .typing-indicator {
@@ -431,8 +493,8 @@
 
     <!-- Floating Trigger Launcher -->
     <div class="launcher-container">
-      <div class="launcher-tooltip">Click to talk with Voice AI</div>
-      <div class="launcher-btn" id="launcherBtn" title="Aura Voice Agent">
+      <div class="launcher-tooltip">Double-click or Ctrl+Shift+S: Edge Reroute Demo | Ctrl+Shift+D: Trigger T-SAC</div>
+      <div class="launcher-btn" id="launcherBtn" title="Aura Voice Agent (Double-click for Edge Demo)">
         <div class="pulse-ring"></div>
         <svg class="launcher-icon" viewBox="0 0 24 24">
           <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
@@ -450,18 +512,29 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2">
             <path d="M2 10v3"></path><path d="M6 6v11"></path><path d="M10 3v18"></path><path d="M14 8v7"></path><path d="M18 5v13"></path><path d="M22 10v3"></path>
           </svg>
-          <span class="brand-title">AURA PROXY</span>
+          <span class="brand-title">AURA EDGE OPERATIONS</span>
         </div>
-        <div class="status-pill" id="statusPill">
-          <span class="status-dot"></span>
-          <span id="statusLabel">Offline</span>
+        <div class="header-right">
+          <div class="status-pill" id="statusPill">
+            <span class="status-dot"></span>
+            <span id="statusLabel">Offline</span>
+          </div>
+          <button class="close-btn" id="closeBtn">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
         </div>
-        <button class="close-btn" id="closeBtn">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
+      </div>
+
+      <!-- T-SAC Low Bandwidth Amber Banner -->
+      <div class="bandwidth-banner" id="bandwidthBanner">
+        <div class="bandwidth-left">
+          <span>⚠️</span>
+          <span>Low Bandwidth: Audio optimized.</span>
+        </div>
+        <span class="rtt-tag" id="rttDisplay">RTT: 1250ms</span>
       </div>
 
       <div class="orb-stage">
@@ -474,7 +547,7 @@
       <div class="transcript-box" id="transcriptBox">
         <div class="msg-row">
           <span class="msg-speaker agent">AURA</span>
-          <span class="msg-text">Welcome! Click Connect to start voice interaction.</span>
+          <span class="msg-text">Ready for Edge Telecom Operations. Double-click launcher or press Ctrl+Shift+S.</span>
         </div>
       </div>
 
@@ -506,9 +579,11 @@
       this.attachShadow({ mode: 'open' });
       this.shadowRoot.appendChild(template.content.cloneNode(true));
 
-      // State
+      // Internal State
       this.isOpen = false;
       this.isWsConnected = false;
+      this.isDegraded = false;
+      this.currentRtt = 0;
       this.currentState = 'DISCONNECTED';
       this.ws = null;
       this.mediaStream = null;
@@ -518,6 +593,7 @@
       this.nextPlaybackTime = 0;
       this.activeSources = [];
       this.agentWords = [];
+      this.pingInterval = null;
 
       // Elements
       this.launcherBtn = this.shadowRoot.getElementById('launcherBtn');
@@ -530,20 +606,50 @@
       this.orbContainer = this.shadowRoot.getElementById('orbContainer');
       this.transcriptBox = this.shadowRoot.getElementById('transcriptBox');
       this.bargeBtn = this.shadowRoot.getElementById('bargeBtn');
+      this.bandwidthBanner = this.shadowRoot.getElementById('bandwidthBanner');
+      this.rttDisplay = this.shadowRoot.getElementById('rttDisplay');
     }
 
     connectedCallback() {
-      console.log('[Aura Widget] <aura-voice-agent> connected to DOM.');
+      console.log('[Aura Widget] <aura-voice-agent> connected to DOM (Hackathon Stage Ready).');
+
+      // Click to toggle drawer
       this.launcherBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this.toggleCard();
       });
+
+      // Double-click launcher -> Trigger Baseline Demo Query
+      this.launcherBtn.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        console.log('[STAGE DEMO] Launcher double-clicked — firing baseline demo query!');
+        this.triggerBaselineDemo();
+      });
+
       this.closeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this.toggleCard(false);
       });
+
       this.connectBtn.addEventListener('click', () => this.handleConnectToggle());
       this.bargeBtn.addEventListener('click', () => this.handleBargeIn());
+
+      // ── Stage Demo Shortcuts: Ctrl+Shift+S (Baseline) & Ctrl+Shift+D (Crisis)
+      this.handleKeydown = (e) => {
+        const isModifier = e.ctrlKey || e.metaKey;
+        if (isModifier && e.shiftKey) {
+          if (e.key === 'S' || e.key === 's') {
+            e.preventDefault();
+            console.warn('[STAGE DEMO] Ctrl+Shift+S pressed — firing baseline demo query!');
+            this.triggerBaselineDemo();
+          } else if (e.key === 'D' || e.key === 'd') {
+            e.preventDefault();
+            console.warn('[STAGE DEMO] Ctrl+Shift+D pressed — firing T-SAC Crisis (RTT: 1250ms)!');
+            this.triggerNetworkDegrade(1250);
+          }
+        }
+      };
+      window.addEventListener('keydown', this.handleKeydown);
 
       // Register global reference for easy scripting
       window.__AuraVoiceAgentInstance = this;
@@ -551,6 +657,9 @@
 
     disconnectedCallback() {
       this.disconnect();
+      if (this.handleKeydown) {
+        window.removeEventListener('keydown', this.handleKeydown);
+      }
     }
 
     attributeChangedCallback(name, oldValue, newValue) {
@@ -567,10 +676,10 @@
     }
 
     get voiceId() {
-      return this.getAttribute('voice-id') || 'aura-default';
+      return this.getAttribute('voice-id') || 'aura-telecom-edge';
     }
 
-    // ── Public API Methods ──────────────────────────────────────────────────
+    // ── Public API & Stage Triggers ─────────────────────────────────────────
 
     open() {
       this.toggleCard(true);
@@ -586,11 +695,57 @@
 
     toggleCard(forceOpen) {
       this.isOpen = forceOpen !== undefined ? forceOpen : !this.isOpen;
-      console.log('[Aura Widget] toggleCard called. New isOpen =', this.isOpen);
       if (this.isOpen) {
         this.widgetCard.classList.remove('hidden');
       } else {
         this.widgetCard.classList.add('hidden');
+      }
+    }
+
+    triggerBaselineDemo() {
+      this.open();
+      // Ensure clean start
+      this.bandwidthBanner.classList.remove('visible');
+      this.isDegraded = false;
+
+      const sendQuery = () => {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          this.ws.send(
+            JSON.stringify({
+              type: 'mock_user_speech',
+              text: DEMO_QUERY_TEXT,
+            })
+          );
+        }
+      };
+
+      if (!this.isWsConnected) {
+        this.connect();
+        const checkInterval = setInterval(() => {
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            clearInterval(checkInterval);
+            setTimeout(sendQuery, 150);
+          }
+        }, 80);
+      } else {
+        sendQuery();
+      }
+    }
+
+    triggerNetworkDegrade(rttValue = 1250) {
+      this.isDegraded = true;
+      this.currentRtt = rttValue;
+      this.bandwidthBanner.classList.add('visible');
+      this.rttDisplay.textContent = `RTT: ${rttValue}ms`;
+
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(
+          JSON.stringify({
+            type: 'network_degrade',
+            payload: { rtt: rttValue },
+          })
+        );
+        console.warn(`[T-SAC] Sent network_degrade message with RTT=${rttValue}ms`);
       }
     }
 
@@ -605,6 +760,8 @@
           this.statusLabel.textContent = 'Offline';
           this.connectBtnText.textContent = 'CONNECT';
           this.connectBtn.className = 'btn-primary';
+          this.bandwidthBanner.classList.remove('visible');
+          this.isDegraded = false;
           break;
         case 'CONNECTING':
           this.statusLabel.textContent = 'Connecting...';
@@ -637,7 +794,7 @@
       }
     }
 
-    appendTranscript(speaker, text, isInterim = false) {
+    appendTranscript(speaker, text, isInterim = false, isTruncated = false) {
       if (isInterim) {
         let interimElem = this.transcriptBox.querySelector('.msg-interim');
         if (!interimElem) {
@@ -656,13 +813,14 @@
         const msgRow = document.createElement('div');
         msgRow.className = 'msg-row';
         const speakerClass = speaker.toLowerCase() === 'user' ? 'user' : 'agent';
-        msgRow.innerHTML = `<span class="msg-speaker ${speakerClass}">${speaker}</span><span class="msg-text">${text}</span>`;
+        const textClass = isTruncated ? 'msg-text truncated' : 'msg-text';
+        msgRow.innerHTML = `<span class="msg-speaker ${speakerClass}">${speaker}</span><span class="${textClass}">${text}</span>`;
         this.transcriptBox.appendChild(msgRow);
       }
       this.transcriptBox.scrollTop = this.transcriptBox.scrollHeight;
     }
 
-    updateAgentStream(text, isFinal) {
+    updateAgentStream(text, isFinal, isTruncated = false) {
       let agentRow = this.transcriptBox.querySelector('.msg-agent-active');
       if (!agentRow) {
         agentRow = document.createElement('div');
@@ -670,7 +828,11 @@
         agentRow.innerHTML = `<span class="msg-speaker agent">AURA</span><span class="msg-text"></span>`;
         this.transcriptBox.appendChild(agentRow);
       }
-      agentRow.querySelector('.msg-text').textContent = text;
+      const textElem = agentRow.querySelector('.msg-text');
+      textElem.textContent = text;
+      if (isTruncated) {
+        textElem.className = 'msg-text truncated';
+      }
       if (isFinal) {
         agentRow.classList.remove('msg-agent-active');
       }
@@ -684,7 +846,7 @@
         console.log('[Widget Mic] Requesting mic access...');
         this.mediaStream = await navigator.mediaDevices.getUserMedia({
           audio: {
-            sampleRate: SAMPLE_RATE,
+            sampleRate: SAMPLE_RATE_16K,
             channelCount: 1,
             echoCancellation: true,
             noiseSuppression: true,
@@ -692,7 +854,7 @@
         });
 
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        this.audioContext = new AudioCtx({ sampleRate: SAMPLE_RATE });
+        this.audioContext = new AudioCtx({ sampleRate: SAMPLE_RATE_16K });
         const source = this.audioContext.createMediaStreamSource(this.mediaStream);
 
         this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
@@ -732,16 +894,24 @@
       }
     }
 
-    // ── Audio Out: Web Audio API Playback ───────────────────────────────────
+    // ── Audio Out: Web Audio API Playback (16kHz & 8kHz) ────────────────────
 
     playPcmChunk(arrayBuffer) {
       try {
         let pcmData = arrayBuffer;
+        let chunkSampleRate = SAMPLE_RATE_16K;
+
         if (arrayBuffer.byteLength >= 4) {
           const header = new Uint8Array(arrayBuffer, 0, 4);
-          const str = String.fromCharCode(...header);
-          if (str === AUDIO_HEADER_STR) {
+          const headerStr = String.fromCharCode(...header);
+
+          if (headerStr === AUDIO_HEADER_8K) {
             pcmData = arrayBuffer.slice(4);
+            chunkSampleRate = SAMPLE_RATE_8K;
+            console.log('[Widget Audio] 🔊 Playing 8kHz low-fidelity audio burst (T-SAC Codec Swapped)');
+          } else if (headerStr === AUDIO_HEADER_16K) {
+            pcmData = arrayBuffer.slice(4);
+            chunkSampleRate = SAMPLE_RATE_16K;
           }
         }
         if (pcmData.byteLength === 0) return;
@@ -754,7 +924,7 @@
 
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         if (!this.playbackContext || this.playbackContext.state === 'closed') {
-          this.playbackContext = new AudioCtx({ sampleRate: SAMPLE_RATE });
+          this.playbackContext = new AudioCtx();
           this.nextPlaybackTime = 0;
         }
 
@@ -762,7 +932,7 @@
           this.playbackContext.resume();
         }
 
-        const audioBuf = this.playbackContext.createBuffer(1, float32.length, SAMPLE_RATE);
+        const audioBuf = this.playbackContext.createBuffer(1, float32.length, chunkSampleRate);
         audioBuf.getChannelData(0).set(float32);
 
         const source = this.playbackContext.createBufferSource();
@@ -796,6 +966,28 @@
       }
     }
 
+    // ── Telemetry Polling (RTT Ping/Pong) ───────────────────────────────────
+
+    startTelemetryPolling() {
+      this.stopTelemetryPolling();
+      this.pingInterval = setInterval(() => {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          const pingPayload = {
+            type: 'ping',
+            timestamp: Date.now(),
+          };
+          this.ws.send(JSON.stringify(pingPayload));
+        }
+      }, 2000);
+    }
+
+    stopTelemetryPolling() {
+      if (this.pingInterval) {
+        clearInterval(this.pingInterval);
+        this.pingInterval = null;
+      }
+    }
+
     // ── WebSocket Connection & Pipeline ─────────────────────────────────────
 
     handleConnectToggle() {
@@ -823,6 +1015,7 @@
             voice_id: this.voiceId,
           })
         );
+        this.startTelemetryPolling();
       };
 
       this.ws.onmessage = (event) => {
@@ -835,6 +1028,25 @@
           const msg = JSON.parse(event.data);
 
           switch (msg.type) {
+            case 'pong': {
+              const rtt = Date.now() - (msg.timestamp || Date.now());
+              this.currentRtt = rtt;
+              if (rtt > 800 && !this.isDegraded) {
+                console.warn(`[T-SAC] Measured RTT ${rtt}ms > 800ms! Triggering degradation.`);
+                this.triggerNetworkDegrade(rtt);
+              }
+              break;
+            }
+
+            case 'network_status': {
+              if (msg.is_degraded) {
+                this.isDegraded = true;
+                this.bandwidthBanner.classList.add('visible');
+                this.rttDisplay.textContent = `RTT: ${msg.rtt || 1250}ms`;
+              }
+              break;
+            }
+
             case 'state_change':
               this.updateStateUI(msg.state);
               if (msg.state === 'LISTENING') {
@@ -852,14 +1064,16 @@
               }
               break;
 
-            case 'transcript_stream':
+            case 'transcript_stream': {
+              const isTruncated = msg.payload?.is_truncated || false;
               if (msg.payload?.speaker === 'user') {
                 this.appendTranscript('USER', msg.payload.text, false);
               } else if (msg.payload?.speaker === 'agent') {
                 this.agentWords.push(msg.payload.text);
-                this.updateAgentStream(this.agentWords.join(' '), msg.payload.is_final);
+                this.updateAgentStream(this.agentWords.join(' '), msg.payload.is_final, isTruncated);
               }
               break;
+            }
 
             case 'flush_audio_buffer':
               this.flushAudioPlayback();
@@ -881,6 +1095,7 @@
     }
 
     disconnect() {
+      this.stopTelemetryPolling();
       this.stopMicrophone();
       this.flushAudioPlayback();
       if (this.ws) {
@@ -888,6 +1103,7 @@
         this.ws = null;
       }
       this.isWsConnected = false;
+      this.isDegraded = false;
       this.updateStateUI('DISCONNECTED');
     }
 
@@ -913,17 +1129,35 @@
       const el = document.querySelector('aura-voice-agent');
       if (el && typeof el.toggle === 'function') el.toggle();
     },
+    triggerBaselineDemo: function () {
+      const el = document.querySelector('aura-voice-agent');
+      if (el && typeof el.triggerBaselineDemo === 'function') {
+        el.triggerBaselineDemo();
+      }
+    },
+    triggerCrisisDemo: function () {
+      const el = document.querySelector('aura-voice-agent');
+      if (el && typeof el.triggerNetworkDegrade === 'function') {
+        el.triggerNetworkDegrade(1250);
+      }
+    },
   };
 
   // Register Custom Element
   if (!customElements.get('aura-voice-agent')) {
     customElements.define('aura-voice-agent', AuraVoiceAgent);
-    console.log('[Aura Widget] <aura-voice-agent> registered successfully.');
+    console.log('[Aura Widget] <aura-voice-agent> registered with Telecom Edge Demo flow.');
   }
 
-  // Auto-bind any data-aura-toggle elements on the host page
+  // Auto-bind any data-aura-open or data-aura-demo buttons on host page
   document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('[data-aura-toggle], [data-aura-open]').forEach((btn) => {
+    document.querySelectorAll('[data-aura-demo]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        window.AuraVoice.triggerBaselineDemo();
+      });
+    });
+    document.querySelectorAll('[data-aura-open]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.preventDefault();
         window.AuraVoice.open();
