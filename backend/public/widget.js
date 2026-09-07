@@ -334,6 +334,13 @@
         animation: orb-breathe 1.5s ease-in-out infinite alternate;
       }
 
+      .orb-container.state-thinking .orb-core {
+        transform: scale(1.12);
+        background: linear-gradient(135deg, #a855f7, #6366f1);
+        box-shadow: 0 0 35px rgba(168, 85, 247, 0.6);
+        animation: orb-rotate 1.2s linear infinite;
+      }
+
       .orb-container.state-responding .orb-core {
         transform: scale(1.1);
         background: linear-gradient(135deg, #06b6d4, #3b82f6);
@@ -348,6 +355,38 @@
       @keyframes orb-rotate {
         0% { filter: hue-rotate(0deg); }
         100% { filter: hue-rotate(360deg); }
+      }
+
+      /* ── One-Tap Quick Operations Chips ────────────────── */
+      .quick-chips-row {
+        display: flex;
+        gap: 6px;
+        padding: 8px 20px 4px 20px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+      }
+      .quick-chips-row::-webkit-scrollbar {
+        display: none;
+      }
+      .chip-btn {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 20px;
+        padding: 5px 11px;
+        color: #94a3b8;
+        font-size: 11px;
+        font-weight: 600;
+        white-space: nowrap;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+      .chip-btn:hover {
+        background: rgba(14, 165, 233, 0.2);
+        border-color: rgba(14, 165, 233, 0.5);
+        color: #38bdf8;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 10px rgba(14, 165, 233, 0.3);
       }
 
       /* ── Dialogue / Transcript Pane ─────────────────────── */
@@ -538,9 +577,9 @@
       </div>
 
       <div class="orb-stage">
-        <div class="orb-container" id="orbContainer">
+        <div class="orb-container aura-orb-container" id="orbContainer">
           <div class="orb-glow-layer"></div>
-          <div class="orb-core"></div>
+          <div class="orb-core aura-orb"></div>
         </div>
       </div>
 
@@ -549,6 +588,16 @@
           <span class="msg-speaker agent">AURA</span>
           <span class="msg-text">Ready for Edge Telecom Operations. Double-click launcher or press Ctrl+Shift+S.</span>
         </div>
+      </div>
+
+      <!-- Quick Action Operations Chips -->
+      <div class="quick-chips-row" id="quickChips">
+        <button class="chip-btn" data-query="Hi, how are you doing today?">👋 Greeting</button>
+        <button class="chip-btn" data-query="Is there any nodes down?">🔴 Nodes Down?</button>
+        <button class="chip-btn" data-query="What is average CPU consumption?">📊 Avg CPU</button>
+        <button class="chip-btn" data-query="Is there any node CPU more than 80%?">🚨 >80% Spikes</button>
+        <button class="chip-btn" data-query="Did we breach the SLA during the edge node downtime?">🛡️ SLA Claim</button>
+        <button class="chip-btn" data-query="Reroute traffic from the failing edge server.">⚡ Reroute</button>
       </div>
 
       <div style="padding: 0 20px;">
@@ -583,17 +632,32 @@
       this.isOpen = false;
       this.isWsConnected = false;
       this.isDegraded = false;
+      this.isAgentSpeaking = false;
       this.currentRtt = 0;
       this.currentState = 'DISCONNECTED';
       this.ws = null;
       this.mediaStream = null;
       this.audioContext = null;
+      this.sourceNode = null;
+      this.analyser = null;
+      this.workletNode = null;
       this.processor = null;
+      this.animationFrameId = null;
       this.playbackContext = null;
       this.nextPlaybackTime = 0;
       this.activeSources = [];
       this.agentWords = [];
       this.pingInterval = null;
+      this.player = { interrupt: () => this.flushAudioPlayback() };
+      this.recognition = null;
+      this.isRecognitionActive = false;
+      this.isRecording = false;
+      this.accumulatedFinalText = '';
+      this.lastCommittedUserText = '';
+      this.speechDebounceTimer = null;
+      this.SILENCE_DEBOUNCE_MS = 750; // Fast natural 750ms silence debounce
+      this.isInterrupted = false;
+      this.pendingListeningState = false;
 
       // Elements
       this.launcherBtn = this.shadowRoot.getElementById('launcherBtn');
@@ -608,20 +672,27 @@
       this.bargeBtn = this.shadowRoot.getElementById('bargeBtn');
       this.bandwidthBanner = this.shadowRoot.getElementById('bandwidthBanner');
       this.rttDisplay = this.shadowRoot.getElementById('rttDisplay');
+      this.quickChips = this.shadowRoot.getElementById('quickChips');
     }
 
     connectedCallback() {
       console.log('[Aura Widget] <aura-voice-agent> connected to DOM (Hackathon Stage Ready).');
 
+      // Global user gesture unlock for browser audio autoplay policies
+      this.ensureAudioContextUnlocked();
+      document.addEventListener('pointerdown', () => this.ensureAudioContextUnlocked(), { once: true });
+
       // Click to toggle drawer
       this.launcherBtn.addEventListener('click', (e) => {
         e.stopPropagation();
+        this.ensureAudioContextUnlocked();
         this.toggleCard();
       });
 
       // Double-click launcher -> Trigger Baseline Demo Query
       this.launcherBtn.addEventListener('dblclick', (e) => {
         e.stopPropagation();
+        this.ensureAudioContextUnlocked();
         console.log('[STAGE DEMO] Launcher double-clicked — firing baseline demo query!');
         this.triggerBaselineDemo();
       });
@@ -631,13 +702,52 @@
         this.toggleCard(false);
       });
 
-      this.connectBtn.addEventListener('click', () => this.handleConnectToggle());
+      this.connectBtn.addEventListener('click', () => {
+        this.ensureAudioContextUnlocked();
+        this.handleConnectToggle();
+      });
       this.bargeBtn.addEventListener('click', () => this.handleBargeIn());
 
-      // ── Stage Demo Shortcuts: Ctrl+Shift+S (Baseline) & Ctrl+Shift+D (Crisis)
+      // Click on Orb to immediately commit user speech or finish listening
+      this.orbContainer.addEventListener('click', () => {
+        this.ensureAudioContextUnlocked();
+        if (this.currentState === 'LISTENING') {
+          console.log('[Widget Mic] Orb clicked — committing speech immediately.');
+          if (this.accumulatedFinalText) {
+            this.commitUserSpeech();
+          } else if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: 'stop_audio' }));
+          }
+        }
+      });
+
+      // Click on Quick Action Suggestion Chips
+      if (this.quickChips) {
+        this.quickChips.addEventListener('click', (e) => {
+          const chip = e.target.closest('.chip-btn');
+          if (chip && chip.dataset.query) {
+            e.stopPropagation();
+            this.ensureAudioContextUnlocked();
+            const queryText = chip.dataset.query;
+            console.log('[Widget Chip] ⚡ Fired quick query:', queryText);
+            this.sendTextQuery(queryText);
+          }
+        });
+      }
+
+      // ── Keyboard Shortcuts: Spacebar/Escape (Barge-in), Ctrl+Shift+S (Demo), Ctrl+Shift+D (Crisis)
       this.handleKeydown = (e) => {
+        // Spacebar or Escape during speech -> instant interruption
+        if ((e.code === 'Space' || e.key === 'Escape') && this.isAgentSpeaking) {
+          e.preventDefault();
+          console.log('[Widget Shortcut] Spacebar/Escape pressed — interrupting Aura!');
+          this.handleBargeIn();
+          return;
+        }
+
         const isModifier = e.ctrlKey || e.metaKey;
         if (isModifier && e.shiftKey) {
+          this.ensureAudioContextUnlocked();
           if (e.key === 'S' || e.key === 's') {
             e.preventDefault();
             console.warn('[STAGE DEMO] Ctrl+Shift+S pressed — firing baseline demo query!');
@@ -653,6 +763,39 @@
 
       // Register global reference for easy scripting
       window.__AuraVoiceAgentInstance = this;
+    }
+
+    getAudioContext() {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!this.audioContext || this.audioContext.state === 'closed') {
+        try {
+          this.audioContext = new AudioCtx();
+        } catch (e) {
+          console.warn('[Widget Audio] Could not initialize AudioContext:', e);
+        }
+      }
+      return this.audioContext;
+    }
+
+    async ensureAudioContextUnlocked() {
+      const ctx = this.getAudioContext();
+      if (ctx && ctx.state === 'suspended') {
+        try {
+          await ctx.resume();
+          console.log('[Widget Audio] 🔊 AudioContext resumed (state: running)');
+        } catch (err) {
+          console.warn('[Widget Audio] Could not resume AudioContext:', err);
+        }
+      }
+      if (ctx) {
+        this.nextPlaybackTime = ctx.currentTime;
+      }
+
+      if (window.speechSynthesis && window.speechSynthesis.paused) {
+        try {
+          window.speechSynthesis.resume();
+        } catch (e) {}
+      }
     }
 
     disconnectedCallback() {
@@ -699,6 +842,41 @@
         this.widgetCard.classList.remove('hidden');
       } else {
         this.widgetCard.classList.add('hidden');
+      }
+    }
+
+    sendTextQuery(queryText) {
+      if (!queryText || !queryText.trim()) return;
+      const clean = queryText.trim();
+      this.ensureAudioContextUnlocked();
+      this.open();
+
+      const doSend = () => {
+        this.isInterrupted = false;
+        this.lastCommittedUserText = clean;
+        this.appendTranscript('USER', clean, false);
+        this.updateStateUI('THINKING');
+
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          this.ws.send(
+            JSON.stringify({
+              type: 'user_speech',
+              text: clean,
+            })
+          );
+        }
+      };
+
+      if (!this.isWsConnected) {
+        this.connect();
+        const checkInterval = setInterval(() => {
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            clearInterval(checkInterval);
+            setTimeout(doSend, 150);
+          }
+        }, 80);
+      } else {
+        doSend();
       }
     }
 
@@ -775,9 +953,11 @@
           this.connectBtnText.textContent = 'DISCONNECT';
           this.connectBtn.className = 'btn-primary btn-danger';
           break;
+        case 'THINKING':
         case 'PROCESSING_STT':
-          this.statusLabel.textContent = 'Processing...';
+          this.statusLabel.textContent = 'Aura is thinking...';
           this.statusPill.classList.add('active');
+          this.orbContainer.classList.add('state-thinking');
           break;
         case 'STREAMING_LLM_TTS':
           this.statusLabel.textContent = 'AI Responding';
@@ -795,7 +975,17 @@
     }
 
     appendTranscript(speaker, text, isInterim = false, isTruncated = false) {
+      if (!text || !text.trim()) return;
+      const cleanText = text.trim();
+      const speakerNormalized = speaker.toUpperCase();
+
       if (isInterim) {
+        // If an agent bubble was active, finalize it first so interim user speech stays below it
+        const activeAgent = this.transcriptBox.querySelector('.msg-agent-active');
+        if (activeAgent) {
+          activeAgent.classList.remove('msg-agent-active');
+        }
+
         let interimElem = this.transcriptBox.querySelector('.msg-interim');
         if (!interimElem) {
           interimElem = document.createElement('div');
@@ -803,24 +993,64 @@
           interimElem.innerHTML = `<span class="msg-speaker user">YOU</span><span class="msg-text interim"></span>`;
           this.transcriptBox.appendChild(interimElem);
         }
-        interimElem.querySelector('.msg-text').innerHTML = `${text} <span class="typing-indicator"></span>`;
+        const textElem = interimElem.querySelector('.msg-text');
+        if (textElem) {
+          textElem.innerHTML = `${cleanText} <span class="typing-indicator"></span>`;
+        }
       } else {
-        const interimElem = this.transcriptBox.querySelector('.msg-interim');
-        if (interimElem && speaker === 'USER') {
-          interimElem.remove();
+        // Finalize any open active agent bubble before committing user message
+        const activeAgent = this.transcriptBox.querySelector('.msg-agent-active');
+        if (activeAgent && speakerNormalized === 'USER') {
+          activeAgent.classList.remove('msg-agent-active');
         }
 
-        const msgRow = document.createElement('div');
-        msgRow.className = 'msg-row';
-        const speakerClass = speaker.toLowerCase() === 'user' ? 'user' : 'agent';
+        // Deduplication: check the last non-interim row in the transcript
+        const allRows = this.transcriptBox.querySelectorAll('.msg-row:not(.msg-interim)');
+        const lastRow = allRows.length > 0 ? allRows[allRows.length - 1] : null;
+        if (lastRow) {
+          const lastSpeaker = lastRow.querySelector('.msg-speaker')?.textContent?.trim()?.toUpperCase();
+          const lastText = lastRow.querySelector('.msg-text')?.textContent?.trim();
+          const expectedSpeaker = speakerNormalized === 'USER' ? 'YOU' : 'AURA';
+          if (lastSpeaker === expectedSpeaker && lastText === cleanText) {
+            // Already rendered, remove any leftover interim and return
+            const leftoverInterim = this.transcriptBox.querySelector('.msg-interim');
+            if (leftoverInterim) leftoverInterim.remove();
+            this.transcriptBox.scrollTop = this.transcriptBox.scrollHeight;
+            return;
+          }
+        }
+
+        // If an interim element exists and we are finalizing USER speech, convert it in-place!
+        const interimElem = this.transcriptBox.querySelector('.msg-interim');
+        let msgRow;
+        if (interimElem && speakerNormalized === 'USER') {
+          msgRow = interimElem;
+          msgRow.className = 'msg-row';
+        } else {
+          if (interimElem) interimElem.remove();
+          msgRow = document.createElement('div');
+          msgRow.className = 'msg-row';
+          this.transcriptBox.appendChild(msgRow);
+        }
+
+        const speakerClass = speakerNormalized === 'USER' ? 'user' : 'agent';
+        const speakerLabel = speakerNormalized === 'USER' ? 'YOU' : 'AURA';
         const textClass = isTruncated ? 'msg-text truncated' : 'msg-text';
-        msgRow.innerHTML = `<span class="msg-speaker ${speakerClass}">${speaker}</span><span class="${textClass}">${text}</span>`;
-        this.transcriptBox.appendChild(msgRow);
+        msgRow.innerHTML = `<span class="msg-speaker ${speakerClass}">${speakerLabel}</span><span class="${textClass}">${cleanText}</span>`;
       }
       this.transcriptBox.scrollTop = this.transcriptBox.scrollHeight;
     }
 
     updateAgentStream(text, isFinal, isTruncated = false) {
+      if (!text || !text.trim()) return;
+      const cleanText = text.trim();
+
+      // Remove any leftover interim user element before streaming agent words
+      const interimElem = this.transcriptBox.querySelector('.msg-interim');
+      if (interimElem) {
+        interimElem.remove();
+      }
+
       let agentRow = this.transcriptBox.querySelector('.msg-agent-active');
       if (!agentRow) {
         agentRow = document.createElement('div');
@@ -829,69 +1059,368 @@
         this.transcriptBox.appendChild(agentRow);
       }
       const textElem = agentRow.querySelector('.msg-text');
-      textElem.textContent = text;
-      if (isTruncated) {
-        textElem.className = 'msg-text truncated';
+      if (textElem) {
+        textElem.textContent = cleanText;
+        if (isTruncated) {
+          textElem.className = 'msg-text truncated';
+        }
       }
       if (isFinal) {
         agentRow.classList.remove('msg-agent-active');
+        this.agentWords = [];
       }
       this.transcriptBox.scrollTop = this.transcriptBox.scrollHeight;
     }
 
-    // ── Audio In: Web Audio API Capture (16kHz PCM) ─────────────────────────
+    // ── Live Speech Recognition (Web Speech API) ───────────────────────────
 
-    async startMicrophone() {
-      try {
-        console.log('[Widget Mic] Requesting mic access...');
-        this.mediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            sampleRate: SAMPLE_RATE_16K,
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-          },
-        });
+    commitUserSpeech() {
+      if (this.speechDebounceTimer) {
+        clearTimeout(this.speechDebounceTimer);
+        this.speechDebounceTimer = null;
+      }
 
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        this.audioContext = new AudioCtx({ sampleRate: SAMPLE_RATE_16K });
-        const source = this.audioContext.createMediaStreamSource(this.mediaStream);
+      const spokenText = (this.accumulatedFinalText || '').trim();
+      this.accumulatedFinalText = '';
 
-        this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
-        this.processor.onaudioprocess = (e) => {
-          if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-          const inputData = e.inputBuffer.getChannelData(0);
+      if (!spokenText) return;
 
-          const buffer = new ArrayBuffer(inputData.length * 2);
-          const view = new DataView(buffer);
-          for (let i = 0; i < inputData.length; i++) {
-            const s = Math.max(-1, Math.min(1, inputData[i]));
-            view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-          }
-          this.ws.send(buffer);
-        };
+      this.isInterrupted = false; // Reset interrupted flag for the new question turn
+      this.lastCommittedUserText = spokenText;
 
-        source.connect(this.processor);
-        this.processor.connect(this.audioContext.destination);
-        console.log('[Widget Mic] PCM Audio streamer active.');
-      } catch (err) {
-        console.error('[Widget Mic] Error initializing microphone:', err);
+      console.log('[Widget STT] 🗣️ Committed full user speech:', spokenText);
+      // Immediately display finalized bubble locally
+      this.appendTranscript('USER', spokenText, false);
+      this.updateStateUI('THINKING');
+
+      // Transmit to backend orchestrator
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(
+          JSON.stringify({
+            type: 'user_speech',
+            text: spokenText,
+          })
+        );
       }
     }
 
-    stopMicrophone() {
+    startSpeechRecognition() {
+      const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRec) {
+        console.warn('[Widget STT] Web Speech API SpeechRecognition is not supported in this browser.');
+        return;
+      }
+
+      if (this.recognition) {
+        try {
+          this.recognition.abort();
+        } catch (e) {}
+        this.recognition = null;
+      }
+
+      this.accumulatedFinalText = '';
+      if (this.speechDebounceTimer) {
+        clearTimeout(this.speechDebounceTimer);
+        this.speechDebounceTimer = null;
+      }
+
+      try {
+        const recognition = new SpeechRec();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+        recognition.maxAlternatives = 1;
+
+        recognition.onstart = () => {
+          this.isRecognitionActive = true;
+          console.log('[Widget STT] 🎙️ Web Speech API live speech recognition active.');
+        };
+
+        recognition.onresult = (event) => {
+          // If user speaks while agent is actively outputting, trigger instant barge-in!
+          if (this.currentState === 'STREAMING_LLM_TTS' && this.isAgentSpeaking) {
+            console.log('[Widget STT] User speech detected during agent response — firing instant Barge-In!');
+            this.handleBargeIn();
+          }
+
+          let interimTranscript = '';
+          let newFinalTranscript = '';
+
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+              newFinalTranscript += ' ' + transcript;
+            } else {
+              interimTranscript += ' ' + transcript;
+            }
+          }
+
+          if (newFinalTranscript.trim()) {
+            this.accumulatedFinalText = (this.accumulatedFinalText + ' ' + newFinalTranscript).trim();
+          }
+
+          const combinedInProgress = (this.accumulatedFinalText + ' ' + interimTranscript).trim();
+          if (combinedInProgress) {
+            this.appendTranscript('USER', combinedInProgress, true);
+          }
+
+          // Reset silence timer on incoming speech activity
+          if (this.speechDebounceTimer) {
+            clearTimeout(this.speechDebounceTimer);
+            this.speechDebounceTimer = null;
+          }
+
+          // When user pauses for >1.6s after uttering words, commit and send
+          if (this.accumulatedFinalText) {
+            this.speechDebounceTimer = setTimeout(() => {
+              this.commitUserSpeech();
+            }, this.SILENCE_DEBOUNCE_MS);
+          }
+        };
+
+        recognition.onerror = (event) => {
+          console.warn('[Widget STT] Recognition notice/error:', event.error);
+          if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+            this.isRecognitionActive = false;
+          }
+        };
+
+        recognition.onend = () => {
+          this.isRecognitionActive = false;
+          // Commit any remaining speech if timer was pending
+          if (this.accumulatedFinalText && !this.speechDebounceTimer) {
+            this.commitUserSpeech();
+          }
+          // Auto-restart if we are still actively recording and listening
+          if (this.isRecording && this.currentState === 'LISTENING') {
+            try {
+              recognition.start();
+            } catch (e) {}
+          }
+        };
+
+        this.recognition = recognition;
+        recognition.start();
+      } catch (err) {
+        console.warn('[Widget STT] Failed to start SpeechRecognition:', err);
+      }
+    }
+
+    stopSpeechRecognition() {
+      if (this.speechDebounceTimer) {
+        clearTimeout(this.speechDebounceTimer);
+        this.speechDebounceTimer = null;
+      }
+      this.accumulatedFinalText = '';
+      if (this.recognition) {
+        try {
+          this.recognition.stop();
+        } catch (e) {}
+        this.recognition = null;
+      }
+      this.isRecognitionActive = false;
+    }
+
+    // ── Audio In: Web Audio API & AudioWorklet Capture (16kHz PCM) ─────────
+
+    async startRecording() {
+      try {
+        if (this.mediaStream && this.isRecording) {
+          return;
+        }
+        this.isRecording = true;
+
+        // 0. Start live Speech Recognition
+        this.startSpeechRecognition();
+
+        console.log('[Widget Mic] 🎙️ Requesting microphone access (voice optimized)...');
+        this.mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+
+        const ctx = this.getAudioContext();
+        if (!ctx) return;
+
+        if (ctx.state === 'suspended') {
+          await ctx.resume().catch(() => {});
+        }
+
+        if (this.sourceNode) {
+          try { this.sourceNode.disconnect(); } catch (e) {}
+        }
+        const sourceNode = ctx.createMediaStreamSource(this.mediaStream);
+        this.sourceNode = sourceNode;
+
+        // 1. Audio Graph Configuration: AnalyserNode
+        if (!this.analyser) {
+          this.analyser = ctx.createAnalyser();
+          this.analyser.fftSize = 256; // 128 frequency bins (fast, responsive)
+          this.analyser.smoothingTimeConstant = 0.8; // Smooth out jitter
+        }
+        try {
+          sourceNode.connect(this.analyser);
+        } catch (e) {}
+
+        // Start Real-Time Volume Visualizer Loop
+        this.updateVisualizer();
+
+        // 2. AudioWorkletNode setup & connection
+        let workletLoaded = false;
+        if (ctx.audioWorklet) {
+          try {
+            await ctx.audioWorklet.addModule('/static/recorder-worklet.js');
+            this.workletNode = new AudioWorkletNode(ctx, 'recorder-worklet');
+
+            this.workletNode.port.onmessage = (event) => {
+              if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                // Instantly stream 16-bit PCM buffer over active WebSocket
+                const buffer = event.data instanceof ArrayBuffer ? event.data : event.data.buffer;
+                this.ws.send(buffer);
+              }
+            };
+
+            // Connect source to AudioWorkletNode
+            sourceNode.connect(this.workletNode);
+            workletLoaded = true;
+            console.log('[Widget Mic] ✓ AudioWorklet active.');
+          } catch (workletErr) {
+            console.warn('[Widget Mic] AudioWorklet load fallback to ScriptProcessor:', workletErr);
+          }
+        }
+
+        // ScriptProcessor fallback for environments without worklet support
+        if (!workletLoaded) {
+          this.processor = ctx.createScriptProcessor(4096, 1, 1);
+          this.processor.onaudioprocess = (e) => {
+            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+            const inputData = e.inputBuffer.getChannelData(0);
+            const buffer = new ArrayBuffer(inputData.length * 2);
+            const view = new DataView(buffer);
+            for (let i = 0; i < inputData.length; i++) {
+              const s = Math.max(-1, Math.min(1, inputData[i]));
+              view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+            }
+            this.ws.send(buffer);
+          };
+          sourceNode.connect(this.processor);
+          // Connect to zero-gain node to prevent microphone audio loopback into speakers
+          const muteNode = ctx.createGain();
+          muteNode.gain.value = 0;
+          this.processor.connect(muteNode);
+          muteNode.connect(ctx.destination);
+          console.log('[Widget Mic] ✓ ScriptProcessor fallback active.');
+        }
+      } catch (err) {
+        console.warn('[Widget Mic] Notice initializing microphone stream:', err);
+      }
+    }
+
+    updateVisualizer() {
+      if (!this.analyser) return;
+
+      const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+      const orb = this.shadowRoot.querySelector('.aura-orb') || this.shadowRoot.querySelector('.orb-core');
+      const orbGlow = this.shadowRoot.querySelector('.orb-glow-layer');
+
+      const render = () => {
+        if (!this.analyser || this.currentState !== 'LISTENING') return;
+
+        try {
+          this.analyser.getByteFrequencyData(dataArray);
+        } catch (e) {
+          return;
+        }
+
+        // Compute Root Mean Square (RMS) / average volume across bins
+        const sum = dataArray.reduce((acc, val) => acc + val, 0);
+        const average = sum / dataArray.length; // Range: 0 to 255
+        const normalizedVolume = Math.min(Math.max(average / 128, 0), 1); // Range: 0.0 to 1.0
+
+        // ── Client-Side VAD: detect user interruption when agent is speaking ──
+        if (normalizedVolume > 0.15 && this.isAgentSpeaking) {
+          console.log(`[Widget VAD] 🗣️ User speech detected (volume: ${normalizedVolume.toFixed(2)}) — Triggering instant Barge-In!`);
+          this.isAgentSpeaking = false; // Debounce
+          this.player.interrupt(); // Immediately stop speakers without waiting for server round-trip
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: 'barge_in' }));
+          }
+        }
+
+        if (orb) {
+          orb.style.transform = `scale(${1 + normalizedVolume * 0.35})`;
+          orb.style.boxShadow = `0 0 ${15 + normalizedVolume * 40}px rgba(56, 189, 248, ${0.4 + normalizedVolume * 0.6})`;
+        }
+        if (orbGlow) {
+          orbGlow.style.opacity = `${0.3 + normalizedVolume * 0.7}`;
+          orbGlow.style.transform = `scale(${1 + normalizedVolume * 0.4})`;
+        }
+
+        this.animationFrameId = window.requestAnimationFrame(render);
+      };
+
+      this.animationFrameId = window.requestAnimationFrame(render);
+    }
+
+    stopRecording() {
+      this.isRecording = false;
+      this.stopSpeechRecognition();
+
+      if (this.animationFrameId) {
+        window.cancelAnimationFrame(this.animationFrameId);
+        this.animationFrameId = null;
+      }
+      if (this.workletNode) {
+        try {
+          this.workletNode.port.onmessage = null;
+          this.workletNode.disconnect();
+        } catch (e) {}
+        this.workletNode = null;
+      }
       if (this.processor) {
-        this.processor.disconnect();
+        try { this.processor.disconnect(); } catch (e) {}
         this.processor = null;
       }
-      if (this.audioContext) {
-        this.audioContext.close().catch(() => {});
-        this.audioContext = null;
+      if (this.analyser) {
+        try { this.analyser.disconnect(); } catch (e) {}
+        this.analyser = null;
+      }
+      if (this.sourceNode) {
+        try { this.sourceNode.disconnect(); } catch (e) {}
+        this.sourceNode = null;
       }
       if (this.mediaStream) {
-        this.mediaStream.getTracks().forEach((t) => t.stop());
+        try {
+          this.mediaStream.getTracks().forEach((t) => t.stop());
+        } catch (e) {}
         this.mediaStream = null;
       }
+
+      // Reset orb styles to default idle scale and resting glow
+      const orb = this.shadowRoot?.querySelector('.aura-orb') || this.shadowRoot?.querySelector('.orb-core');
+      if (orb) {
+        orb.style.transform = 'scale(1)';
+        orb.style.boxShadow = '';
+      }
+      const orbGlow = this.shadowRoot?.querySelector('.orb-glow-layer');
+      if (orbGlow) {
+        orbGlow.style.opacity = '';
+        orbGlow.style.transform = '';
+      }
+
+      console.log('[Widget Mic] 🛑 Microphone stream paused.');
+    }
+
+    // Method aliases for backward compatibility
+    startMicrophone() {
+      return this.startRecording();
+    }
+
+    stopMicrophone() {
+      return this.stopRecording();
     }
 
     // ── Audio Out: Web Audio API Playback (16kHz & 8kHz) ────────────────────
@@ -916,30 +1445,29 @@
         }
         if (pcmData.byteLength === 0) return;
 
+        this.isAgentSpeaking = true;
+
         const int16 = new Int16Array(pcmData);
         const float32 = new Float32Array(int16.length);
         for (let i = 0; i < int16.length; i++) {
           float32[i] = int16[i] / 32768.0;
         }
 
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        if (!this.playbackContext || this.playbackContext.state === 'closed') {
-          this.playbackContext = new AudioCtx();
-          this.nextPlaybackTime = 0;
+        const ctx = this.getAudioContext();
+        if (!ctx) return;
+
+        if (ctx.state === 'suspended') {
+          ctx.resume().catch(() => {});
         }
 
-        if (this.playbackContext.state === 'suspended') {
-          this.playbackContext.resume();
-        }
-
-        const audioBuf = this.playbackContext.createBuffer(1, float32.length, chunkSampleRate);
+        const audioBuf = ctx.createBuffer(1, float32.length, chunkSampleRate);
         audioBuf.getChannelData(0).set(float32);
 
-        const source = this.playbackContext.createBufferSource();
+        const source = ctx.createBufferSource();
         source.buffer = audioBuf;
-        source.connect(this.playbackContext.destination);
+        source.connect(ctx.destination);
 
-        const now = this.playbackContext.currentTime;
+        const now = ctx.currentTime;
         const startTime = Math.max(now, this.nextPlaybackTime);
         source.start(startTime);
         this.nextPlaybackTime = startTime + audioBuf.duration;
@@ -947,13 +1475,106 @@
         this.activeSources.push(source);
         source.onended = () => {
           this.activeSources = this.activeSources.filter((s) => s !== source);
+          if (this.activeSources.length === 0) {
+            this.isAgentSpeaking = false;
+            if (this.pendingListeningState || this.currentState === 'LISTENING') {
+              this.pendingListeningState = false;
+              this.updateStateUI('LISTENING');
+              const activeAgent = this.transcriptBox?.querySelector('.msg-agent-active');
+              if (activeAgent) {
+                activeAgent.classList.remove('msg-agent-active');
+              }
+              this.startRecording();
+            }
+          }
         };
       } catch (err) {
-        console.warn('[Widget Audio Playback] Error playing chunk:', err);
+        console.warn('[Widget Audio Playback] Notice playing chunk:', err);
+      }
+    }
+
+    speakStreamWord(word, isFinal) {
+      if (this.isInterrupted) return;
+      if (!this.spokenBuffer) this.spokenBuffer = [];
+      if (word && word.trim()) {
+        this.spokenBuffer.push(word.trim());
+      }
+
+      // Speak when sentence/phrase boundary reached or stream is final
+      const isBoundary = word && (
+        word.endsWith('.') || word.endsWith('?') || word.endsWith('!') || 
+        word.endsWith(';') || word.endsWith(':') || word.endsWith('\n')
+      );
+
+      if (isBoundary || isFinal) {
+        const sentence = this.spokenBuffer.join(' ').trim();
+        this.spokenBuffer = [];
+        if (sentence && window.speechSynthesis && !this.isInterrupted) {
+          try {
+            // Unpause browser SpeechSynthesis if stuck in paused state
+            if (window.speechSynthesis.paused) {
+              window.speechSynthesis.resume();
+            }
+
+            const utter = new SpeechSynthesisUtterance(sentence);
+            utter.rate = 1.05;
+            utter.pitch = 1.0;
+            utter.lang = 'en-US';
+
+            // Retain reference in window to prevent Chrome V8 garbage collection mid-speech
+            if (!window._activeSpeechUtterances) window._activeSpeechUtterances = [];
+            window._activeSpeechUtterances.push(utter);
+
+            utter.onstart = () => {
+              if (!this.isInterrupted) {
+                this.isAgentSpeaking = true;
+              }
+            };
+            utter.onend = () => {
+              window._activeSpeechUtterances = (window._activeSpeechUtterances || []).filter((u) => u !== utter);
+              if ((!window._activeSpeechUtterances || window._activeSpeechUtterances.length === 0) &&
+                  this.activeSources.length === 0) {
+                this.isAgentSpeaking = false;
+                if (this.pendingListeningState || this.currentState === 'LISTENING') {
+                  this.pendingListeningState = false;
+                  this.updateStateUI('LISTENING');
+                  this.startRecording();
+                }
+              }
+            };
+            utter.onerror = (e) => {
+              window._activeSpeechUtterances = (window._activeSpeechUtterances || []).filter((u) => u !== utter);
+              if ((!window._activeSpeechUtterances || window._activeSpeechUtterances.length === 0) &&
+                  this.activeSources.length === 0) {
+                this.isAgentSpeaking = false;
+                if (this.pendingListeningState || this.currentState === 'LISTENING') {
+                  this.pendingListeningState = false;
+                  this.updateStateUI('LISTENING');
+                  this.startRecording();
+                }
+              }
+            };
+
+            window.speechSynthesis.speak(utter);
+          } catch (e) {
+            console.warn('[Widget TTS] Speech error:', e);
+          }
+        }
       }
     }
 
     flushAudioPlayback() {
+      this.pendingListeningState = false;
+      this.spokenBuffer = [];
+      if (window.speechSynthesis) {
+        try {
+          window.speechSynthesis.cancel();
+          window.speechSynthesis.resume();
+        } catch (e) {}
+      }
+      if (window._activeSpeechUtterances) {
+        window._activeSpeechUtterances = [];
+      }
       this.activeSources.forEach((src) => {
         try {
           src.stop();
@@ -961,8 +1582,10 @@
         } catch (e) {}
       });
       this.activeSources = [];
-      if (this.playbackContext) {
-        this.nextPlaybackTime = this.playbackContext.currentTime;
+      this.isAgentSpeaking = false;
+      const ctx = this.getAudioContext();
+      if (ctx) {
+        this.nextPlaybackTime = ctx.currentTime;
       }
     }
 
@@ -1020,7 +1643,10 @@
 
       this.ws.onmessage = (event) => {
         if (event.data instanceof ArrayBuffer) {
-          this.playPcmChunk(event.data);
+          if (!this.isInterrupted) {
+            this.isAgentSpeaking = true;
+            this.playPcmChunk(event.data);
+          }
           return;
         }
 
@@ -1028,6 +1654,13 @@
           const msg = JSON.parse(event.data);
 
           switch (msg.type) {
+            case 'clear_audio':
+            case 'flush_audio_buffer':
+              this.isInterrupted = true;
+              this.isAgentSpeaking = false;
+              this.flushAudioPlayback();
+              break;
+
             case 'pong': {
               const rtt = Date.now() - (msg.timestamp || Date.now());
               this.currentRtt = rtt;
@@ -1047,16 +1680,37 @@
               break;
             }
 
-            case 'state_change':
-              this.updateStateUI(msg.state);
-              if (msg.state === 'LISTENING') {
-                this.startMicrophone();
-              } else if (msg.state === 'PROCESSING_STT') {
-                this.stopMicrophone();
+            case 'state_change': {
+              if (msg.state === 'LISTENING' || msg.state === 'IDLE') {
+                if (this.activeSources.length > 0) {
+                  // Audio chunks are still rendering out of speakers; defer recording to prevent mic feedback
+                  this.pendingListeningState = true;
+                } else {
+                  this.pendingListeningState = false;
+                  this.isAgentSpeaking = false;
+                  this.updateStateUI(msg.state);
+                  const activeAgent = this.transcriptBox?.querySelector('.msg-agent-active');
+                  if (activeAgent) {
+                    activeAgent.classList.remove('msg-agent-active');
+                  }
+                  this.startRecording();
+                }
               } else if (msg.state === 'STREAMING_LLM_TTS') {
+                this.pendingListeningState = false;
+                this.isInterrupted = false;
+                this.isAgentSpeaking = true;
+                this.updateStateUI(msg.state);
                 this.agentWords = [];
+                this.spokenBuffer = [];
+                const activeAgent = this.transcriptBox?.querySelector('.msg-agent-active');
+                if (activeAgent) {
+                  activeAgent.classList.remove('msg-agent-active');
+                }
+              } else {
+                this.updateStateUI(msg.state);
               }
               break;
+            }
 
             case 'transcript_interim':
               if (msg.payload?.text) {
@@ -1065,19 +1719,23 @@
               break;
 
             case 'transcript_stream': {
+              if (this.isInterrupted && msg.payload?.speaker === 'agent') {
+                return; // Discard late streaming chunks from interrupted response
+              }
               const isTruncated = msg.payload?.is_truncated || false;
               if (msg.payload?.speaker === 'user') {
-                this.appendTranscript('USER', msg.payload.text, false);
+                const userText = (msg.payload.text || '').trim();
+                if (userText && userText !== this.lastCommittedUserText) {
+                  this.lastCommittedUserText = userText;
+                  this.appendTranscript('USER', userText, false);
+                }
               } else if (msg.payload?.speaker === 'agent') {
-                this.agentWords.push(msg.payload.text);
+                const word = msg.payload.text || '';
+                this.agentWords.push(word);
                 this.updateAgentStream(this.agentWords.join(' '), msg.payload.is_final, isTruncated);
               }
               break;
             }
-
-            case 'flush_audio_buffer':
-              this.flushAudioPlayback();
-              break;
           }
         } catch (err) {
           console.error('[Widget WS] Message parse error:', err);
@@ -1098,6 +1756,7 @@
       this.stopTelemetryPolling();
       this.stopMicrophone();
       this.flushAudioPlayback();
+      this.isAgentSpeaking = false;
       if (this.ws) {
         this.ws.close();
         this.ws = null;
@@ -1108,10 +1767,22 @@
     }
 
     handleBargeIn() {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: 'client_barge_in' }));
-      }
+      console.log('[Widget] ⚡ Instant barge-in interruption triggered!');
+      this.isInterrupted = true;
+      this.isAgentSpeaking = false;
       this.flushAudioPlayback();
+      
+      const activeAgent = this.transcriptBox?.querySelector('.msg-agent-active');
+      if (activeAgent) {
+        activeAgent.classList.remove('msg-agent-active');
+      }
+      this.agentWords = [];
+
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: 'barge_in' }));
+      }
+      this.updateStateUI('LISTENING');
+      this.startRecording();
     }
   }
 

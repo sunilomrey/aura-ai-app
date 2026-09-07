@@ -38,11 +38,85 @@ A complete end-to-end Voice AI platform featuring:
 Before running locally, make sure you have:
 * **Node.js** (v18.0.0 or higher) & `npm`
 * **Python** (v3.9 or higher) & `pip`
+* **Docker & Docker Compose** (Optional, for 1-command containerized run)
 * A modern web browser (Google Chrome, Microsoft Edge, or Safari)
 
 ---
 
-## 🚀 Quick Start (Local Setup)
+## 🐳 One-Command Setup with Docker
+
+Run the entire system (FastAPI backend with real-time WebSockets, local audio engine, NOC Console, and React Native Web App) with **a single command**:
+
+```bash
+# 1. Clone or navigate to the repository
+cd aura-ai-app
+
+# 2. Launch all services with Docker Compose
+docker compose up --build
+```
+
+### Access Points:
+* **📱 Main Voice Web Application**: [http://localhost:8081](http://localhost:8081)
+* **💼 Telecom NOC Demo Console**: [http://localhost:8000/demo](http://localhost:8000/demo)
+* **⚡ Backend API & Health Check**: [http://localhost:8000/health](http://localhost:8000/health)
+* **📦 Embeddable Web Widget**: [http://localhost:8000/public/widget.js](http://localhost:8000/public/widget.js)
+
+To run in the background (detached mode):
+```bash
+docker compose up -d --build
+```
+To stop the services:
+```bash
+docker compose down
+```
+
+---
+
+### Alternative: Standalone Single-Container Docker Run
+
+You can also build and run the unified multi-stage production container:
+
+```bash
+docker build -t aura-ai-app .
+docker run -p 8000:8000 aura-ai-app
+```
+
+---
+
+## 🔑 Environment Variables & API Keys
+
+### ⚡ **Do you need an API key to run Aura?**
+**No external API keys are required!** 
+
+Aura is built with a **resilient hybrid edge architecture** that works **100% out of the box without any external API keys or paid cloud accounts**:
+* **Built-in Telecom Edge Engine**: Handles all domain conversations (SLA penalty claims, node status, CPU load checks, BGP flap alerts, zero-touch router provisioning, and traffic rerouting).
+* **Local Speech & Audio Processing**: Uses client-side Web Speech API / local energy-based VAD / Faster-Whisper, and edge PCM audio synthesis.
+* **T-SAC (Telecom Semantic Adaptive Compression)**: Autonomous bandwidth throttling and 8kHz codec fallback testable without internet connectivity.
+
+---
+
+### ☁️ **Optional Cloud API Keys (For Live Cloud Scaling)**
+
+If you want to connect live enterprise cloud models (Azure OpenAI), you can provide them via a `.env` file:
+
+```bash
+# Copy the example environment template
+cp .env.example .env
+```
+
+| Environment Variable | Required? | Default | Description |
+|---|---|---|---|
+| `PORT` | Optional | `8000` | Backend HTTP & WebSocket server port. |
+| `AZURE_OPENAI_API_KEY` | Optional | *Empty (Local Fallback)* | Azure OpenAI API Key for GPT-4.1-mini streaming. |
+| `AZURE_OPENAI_ENDPOINT` | Optional | `https://mock-azure.openai.azure.com/` | Azure OpenAI resource endpoint URL. |
+| `AZURE_OPENAI_DEPLOYMENT` | Optional | `gpt-4.1-mini` | Azure deployment name. |
+| `AZURE_OPENAI_API_VERSION` | Optional | `2023-05-15` | Azure OpenAI API version. |
+
+> **Note**: If `AZURE_OPENAI_API_KEY` is not set or if network connectivity is lost, the system automatically and seamlessly falls back to the local high-speed edge reasoning and synthesis engine.
+
+---
+
+## 🚀 Manual Local Setup (Without Docker)
 
 ### 1. Backend Setup & Run (Port 8000)
 

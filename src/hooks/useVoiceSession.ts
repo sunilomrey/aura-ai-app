@@ -5,7 +5,14 @@ import { Message, AppState } from '../types';
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
-const WS_BASE_URL = 'ws://localhost:8000/ws/voice';
+const getWsBaseUrl = () => {
+  if (typeof window !== 'undefined' && window.location) {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.hostname || 'localhost';
+    return `${proto}//${host}:8000/ws/proxy`;
+  }
+  return 'ws://localhost:8000/ws/proxy';
+};
 const AUDIO_SAMPLE_RATE = 16000; // 16 kHz
 
 /**
@@ -13,14 +20,6 @@ const AUDIO_SAMPLE_RATE = 16000; // 16 kHz
  * ================
  * Full-duplex voice session hook that connects the React Native frontend
  * to the FastAPI WebSocket backend.
- *
- * Capabilities:
- *  - Captures microphone audio via getUserMedia + ScriptProcessor
- *  - Streams raw 16-bit PCM chunks to the backend over WebSocket
- *  - Receives interim & final transcripts + streamed agent responses
- *  - Plays incoming simulated TTS audio tones smoothly via Web Audio API
- *  - Supports Barge-in: stops audio playback and cancels server tasks instantly
- *  - Drives appState transitions based on server state changes
  */
 export const useVoiceSession = () => {
   const [appState, setAppState] = useState<AppState>('DISCONNECTED');
@@ -35,11 +34,32 @@ export const useVoiceSession = () => {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const sessionIdRef = useRef<string>('');
   const agentWordsRef = useRef<string[]>([]);
+  const recognitionRef = useRef<any>(null);
 
   // Audio Playback references (for incoming TTS audio frames)
   const playbackContextRef = useRef<AudioContext | null>(null);
   const nextPlaybackTimeRef = useRef<number>(0);
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const pendingListeningRef = useRef<boolean>(false);
+
+  // -----------------------------------------------------------------------
+  // Safe AudioContext getter
+  // -----------------------------------------------------------------------
+  const getAudioContext = useCallback(() => {
+    if (typeof window === 'undefined') return null;
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return null;
+
+    if (!playbackContextRef.current || playbackContextRef.current.state === 'closed') {
+      try {
+        playbackContextRef.current = new AudioCtx();
+        nextPlaybackTimeRef.current = 0;
+      } catch (e) {
+        console.warn('[Audio Playback] Could not init AudioContext:', e);
+      }
+    }
+    return playbackContextRef.current;
+  }, []);
 
   // -----------------------------------------------------------------------
   // PCM conversion helpers
@@ -62,12 +82,18 @@ export const useVoiceSession = () => {
 
     try {
       let pcmBytes = buffer;
-      // Check for 4-byte 'AURA' header
+      let frameRate = AUDIO_SAMPLE_RATE;
+
+      // Check for 4-byte 'AURA' or 'A8KH' header
       if (buffer.byteLength >= 4) {
-        const headerBytes = new Uint8Array(buffer, 0, 4);
+        const headerBytes = new Uint8Array(buffer.slice(0, 4));
         const headerStr = String.fromCharCode(...headerBytes);
         if (headerStr === 'AURA') {
           pcmBytes = buffer.slice(4);
+          frameRate = 16000;
+        } else if (headerStr === 'A8KH') {
+          pcmBytes = buffer.slice(4);
+          frameRate = 8000;
         }
       }
 
@@ -79,20 +105,14 @@ export const useVoiceSession = () => {
         float32[i] = int16[i] / 32768.0;
       }
 
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
+      const ctx = getAudioContext();
+      if (!ctx) return;
 
-      if (!playbackContextRef.current || playbackContextRef.current.state === 'closed') {
-        playbackContextRef.current = new AudioCtx({ sampleRate: AUDIO_SAMPLE_RATE });
-        nextPlaybackTimeRef.current = 0;
-      }
-
-      const ctx = playbackContextRef.current;
       if (ctx.state === 'suspended') {
-        ctx.resume();
+        ctx.resume().catch(() => {});
       }
 
-      const audioBuffer = ctx.createBuffer(1, float32.length, AUDIO_SAMPLE_RATE);
+      const audioBuffer = ctx.createBuffer(1, float32.length, frameRate);
       audioBuffer.getChannelData(0).set(float32);
 
       const source = ctx.createBufferSource();
@@ -107,14 +127,20 @@ export const useVoiceSession = () => {
       activeSourcesRef.current.push(source);
       source.onended = () => {
         activeSourcesRef.current = activeSourcesRef.current.filter((s) => s !== source);
+        if (activeSourcesRef.current.length === 0 && pendingListeningRef.current) {
+          pendingListeningRef.current = false;
+          setAppState('USER_SPEAKING');
+          startMicCapture();
+        }
       };
     } catch (err) {
       console.warn('[Audio Playback] Error playing audio chunk:', err);
     }
-  }, []);
+  }, [getAudioContext, startMicCapture]);
 
   /** Stop and flush all audio playback queues (for barge-in) */
   const flushAudioPlayback = useCallback(() => {
+    pendingListeningRef.current = false;
     activeSourcesRef.current.forEach((src) => {
       try {
         src.stop();
@@ -161,7 +187,7 @@ export const useVoiceSession = () => {
       mediaStreamRef.current = stream;
 
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      const audioCtx = new AudioCtx({ sampleRate: AUDIO_SAMPLE_RATE });
+      const audioCtx = new AudioCtx();
       audioContextRef.current = audioCtx;
 
       const source = audioCtx.createMediaStreamSource(stream);
@@ -234,14 +260,23 @@ export const useVoiceSession = () => {
             console.log(`[WS] ⚡ State changed → ${serverState}`);
 
             if (serverState === 'LISTENING') {
-              setAppState('USER_SPEAKING');
-              startMicCapture();
+              if (activeSourcesRef.current.length > 0) {
+                // Audio frames are still physically rendering; defer mic capture
+                pendingListeningRef.current = true;
+              } else {
+                pendingListeningRef.current = false;
+                setAppState('USER_SPEAKING');
+                startMicCapture();
+              }
             } else if (serverState === 'PROCESSING_STT') {
+              pendingListeningRef.current = false;
               stopMicCapture();
             } else if (serverState === 'STREAMING_LLM_TTS') {
+              pendingListeningRef.current = false;
               setAppState('AGENT_RESPONDING');
               agentWordsRef.current = [];
             } else if (serverState === 'IDLE') {
+              pendingListeningRef.current = false;
               setAppState('IDLE');
               agentWordsRef.current = [];
               setInterimText('');
@@ -304,7 +339,7 @@ export const useVoiceSession = () => {
 
     const sessionId = `session-${Date.now()}`;
     sessionIdRef.current = sessionId;
-    const url = `${WS_BASE_URL}/${sessionId}`;
+    const url = `${getWsBaseUrl()}/${sessionId}`;
 
     setAppState('CONNECTING');
     setMessages([{ sender: 'AURA', text: 'Connecting to real-time voice pipeline...' }]);
@@ -386,6 +421,36 @@ export const useVoiceSession = () => {
     });
   }, [appState, startMicCapture, stopMicCapture]);
 
+  const sendTextQuery = useCallback(
+    (queryText: string) => {
+      if (!queryText || !queryText.trim()) return;
+      const clean = queryText.trim();
+      appendMessage('USER', clean, false, false);
+      setAppState('AGENT_RESPONDING');
+      agentWordsRef.current = [];
+
+      const doSend = () => {
+        const ws = wsRef.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'user_speech', text: clean }));
+        }
+      };
+
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        connect();
+        const interval = setInterval(() => {
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            clearInterval(interval);
+            setTimeout(doSend, 150);
+          }
+        }, 80);
+      } else {
+        doSend();
+      }
+    },
+    [connect, appendMessage]
+  );
+
   useEffect(() => {
     return () => {
       stopMicCapture();
@@ -407,5 +472,6 @@ export const useVoiceSession = () => {
     disconnect,
     stopSpeaking,
     bargeIn,
+    sendTextQuery,
   };
 };

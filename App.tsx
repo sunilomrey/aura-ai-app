@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, StatusBar, SafeAreaView, Modal, TouchableOpacity } from 'react-native';
+import { StyleSheet, Text, View, StatusBar, SafeAreaView, Modal, TouchableOpacity, ScrollView } from 'react-native';
 import { WifiOff, Settings, RefreshCw, AudioLines } from 'lucide-react-native';
 import { AuraOrb } from './src/components/AuraOrb';
 import { TranscriptView } from './src/components/TranscriptView';
@@ -7,6 +7,15 @@ import { ControlDock } from './src/components/ControlDock';
 import { COLORS, ROUNDED, SPACING } from './src/theme';
 import { AppState, Persona } from './src/types';
 import { useVoiceSession } from './src/hooks/useVoiceSession';
+
+const QUICK_OPERATIONS = [
+  { label: '👋 Greeting', query: 'Hi, how are you doing today?' },
+  { label: '🔴 Nodes Down?', query: 'Is there any nodes down?' },
+  { label: '📊 Avg CPU', query: 'What is average CPU consumption?' },
+  { label: '🚨 >80% Spikes', query: 'Is there any node CPU more than 80%?' },
+  { label: '🛡️ SLA Claim', query: 'Did we breach the SLA during the edge node downtime?' },
+  { label: '⚡ Reroute', query: 'Reroute traffic from the failing edge server.' },
+];
 
 export default function App() {
   const [activePersona, setActivePersona] = useState<Persona>({
@@ -26,6 +35,7 @@ export default function App() {
     disconnect,
     stopSpeaking,
     bargeIn,
+    sendTextQuery,
   } = useVoiceSession();
 
   const handleStateChange = (newState: AppState) => {
@@ -207,6 +217,22 @@ export default function App() {
             <TranscriptView messages={messages} state={appState} />
           </View>
         )}
+
+        {/* One-Tap Quick Operations Chips */}
+        <View style={styles.chipsContainer}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsScroll}>
+            {QUICK_OPERATIONS.map((chip, idx) => (
+              <TouchableOpacity
+                key={idx}
+                style={styles.chipBtn}
+                onPress={() => sendTextQuery(chip.query)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.chipText}>{chip.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
 
         {/* Floating Controls Dock at bottom */}
         <View style={styles.bottomDockContainer}>
@@ -548,6 +574,27 @@ const styles = StyleSheet.create({
   cancelModalBtnText: {
     color: COLORS.onSurfaceVariant,
     fontSize: 13,
+    fontWeight: '600',
+  },
+  chipsContainer: {
+    paddingVertical: SPACING.unit * 2,
+    paddingHorizontal: SPACING.gutter,
+  },
+  chipsScroll: {
+    gap: SPACING.unit * 2,
+    alignItems: 'center',
+  },
+  chipBtn: {
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderWidth: 1,
+    borderRadius: ROUNDED.full,
+    paddingVertical: SPACING.unit * 2,
+    paddingHorizontal: SPACING.unit * 3.5,
+  },
+  chipText: {
+    color: COLORS.onSurfaceVariant,
+    fontSize: 12,
     fontWeight: '600',
   },
 });
